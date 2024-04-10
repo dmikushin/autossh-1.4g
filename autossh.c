@@ -348,6 +348,10 @@ main(int argc, char **argv)
 			xerrlog(LOG_ERR, "invalid echo port  \"%s\"", echop);
 	}
 
+	if ((s = getenv("AUTOSSH_MHOST")) != NULL)
+		if (*s != '\0')
+			mhost = s;
+
 	/* 
 	 * Check, and get the read port (write port + 1);
 	 * then construct port-forwarding arguments for ssh.
