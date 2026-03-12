@@ -96,6 +96,9 @@ const char *rcsid = "$Id: autossh.c,v 1.91 2019/01/05 01:23:39 harding Exp $";
 #define MAX_CONN_TRIES	3	/* how many attempts */
 #define MAX_START	(-1)	/* max # of runs; <0 == forever */
 #define MAX_MESSAGE	64	/* max length of message we can add */
+#define KILL_TIMEOUT	10	/* seconds to wait for SIGTERM before SIGKILL */
+#define STDERR_BUF_SZ	4096	/* buffer for reading SSH stderr */
+#define PORT_FWD_FAIL_DELAY 5	/* seconds to wait before restart on port fwd failure */
 
 #define P_CONTINUE	0	/* continue monitoring */
 #define P_RESTART	1	/* restart ssh process */
@@ -144,6 +147,8 @@ char	**newav;
 #define START_AV_SZ	16
 
 int	cchild;			/* current child */
+int	ssh_stderr_fd = -1;	/* read end of SSH stderr pipe */
+volatile sig_atomic_t	port_fwd_failed; /* SSH reported port forwarding failure */
 
 volatile sig_atomic_t   exit_signalled;  /* signalled outside of monitor loop */
 volatile sig_atomic_t	restart_ssh;	/* signalled to restart ssh child */
@@ -170,6 +175,7 @@ void	conn_addr(char *host,  char *port, struct addrinfo **resp);
 int	conn_listen(char *host,  char *port);
 int	conn_remote(char *host,  char *port);
 void	grace_time(time_t last_start);
+int	check_ssh_stderr(void);
 void	unlink_pid_file(void);
 void	errlog(int level, char *fmt, ...)
 	    __attribute__ ((__format__ (__printf__, 2, 3)));
@@ -738,37 +744,73 @@ ssh_run(int sock, char **av)
 			return P_EXITERR;
 		}
 		time(&start_time);
+		port_fwd_failed = 0;
 		if (max_start < 0)
-			errlog(LOG_INFO, "starting ssh (count %d)", 
+			errlog(LOG_INFO, "starting ssh (count %d)",
 			   start_count);
 		else
-			errlog(LOG_INFO, "starting ssh (count %d of %d)", 
+			errlog(LOG_INFO, "starting ssh (count %d of %d)",
 			   start_count, max_start);
-		cchild = fork();
-		switch (cchild) {
-		case 0:
-			errlog(LOG_DEBUG, "child of %d execing %s",
-			    getppid(), av[0]);
-			execvp(av[0], av);
-			errlog(LOG_ERR, "%s: %s", av[0], strerror(errno));
-			 /* else can loop restarting! */
-			kill(getppid(), SIGTERM);
-			_exit(1);
-			break;
-		case -1:
-			cchild = 0;
-			xerrlog(LOG_ERR, "fork: %s", strerror(errno));
-			break;
-		default:
-			errlog(LOG_INFO, "ssh child pid is %d", (int)cchild);
-			set_sig_handlers();
-			retval = ssh_watch(sock);
-			dolongjmp = 0;
-			clear_alarm_timer();
-			unset_sig_handlers();
-			if (retval == P_EXITOK || retval == P_EXITERR)
-				return retval;
-			break;
+
+		/*
+		 * Create a pipe to capture SSH stderr so we can
+		 * detect errors like "remote port forwarding failed"
+		 * without waiting for the next poll interval.
+		 */
+		{
+			int stderr_pipe[2];
+			if (pipe(stderr_pipe) < 0) {
+				errlog(LOG_ERR, "pipe: %s", strerror(errno));
+				stderr_pipe[0] = stderr_pipe[1] = -1;
+			}
+			cchild = fork();
+			switch (cchild) {
+			case 0:
+				/* child: redirect stderr to pipe */
+				if (stderr_pipe[1] >= 0) {
+					close(stderr_pipe[0]);
+					dup2(stderr_pipe[1], STDERR_FILENO);
+					close(stderr_pipe[1]);
+				}
+				errlog(LOG_DEBUG, "child of %d execing %s",
+				    getppid(), av[0]);
+				execvp(av[0], av);
+				errlog(LOG_ERR, "%s: %s", av[0], strerror(errno));
+				 /* else can loop restarting! */
+				kill(getppid(), SIGTERM);
+				_exit(1);
+				break;
+			case -1:
+				cchild = 0;
+				if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
+				if (stderr_pipe[1] >= 0) close(stderr_pipe[1]);
+				xerrlog(LOG_ERR, "fork: %s", strerror(errno));
+				break;
+			default:
+				/* parent: keep read end, close write end */
+				if (stderr_pipe[1] >= 0)
+					close(stderr_pipe[1]);
+				ssh_stderr_fd = stderr_pipe[0];
+				if (ssh_stderr_fd >= 0) {
+					/* set non-blocking */
+					int flags = fcntl(ssh_stderr_fd, F_GETFL, 0);
+					if (flags >= 0)
+						fcntl(ssh_stderr_fd, F_SETFL, flags | O_NONBLOCK);
+				}
+				errlog(LOG_INFO, "ssh child pid is %d", (int)cchild);
+				set_sig_handlers();
+				retval = ssh_watch(sock);
+				dolongjmp = 0;
+				clear_alarm_timer();
+				unset_sig_handlers();
+				if (ssh_stderr_fd >= 0) {
+					close(ssh_stderr_fd);
+					ssh_stderr_fd = -1;
+				}
+				if (retval == P_EXITOK || retval == P_EXITERR)
+					return retval;
+				break;
+			}
 		}
 	}
 
@@ -778,8 +820,41 @@ ssh_run(int sock, char **av)
 }
 
 /*
+ * Read available data from SSH stderr pipe and check for known
+ * error patterns. Also forward the data to our own stderr so the
+ * user can still see SSH messages.
+ * Returns 1 if a fatal error was detected, 0 otherwise.
+ */
+int
+check_ssh_stderr(void)
+{
+	char	buf[STDERR_BUF_SZ];
+	ssize_t	n;
+
+	if (ssh_stderr_fd < 0)
+		return 0;
+
+	while ((n = read(ssh_stderr_fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
+		/* Forward to our stderr so user sees the messages */
+		if (write(STDERR_FILENO, buf, n) < 0) {
+			/* ignore write errors on stderr */
+		}
+
+		if (strstr(buf, "remote port forwarding failed")) {
+			errlog(LOG_ERR,
+			    "detected SSH error: remote port forwarding "
+			    "failed; will kill and restart ssh");
+			port_fwd_failed = 1;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/*
  * Periodically test network connection. On signals, determine what
- * happened or what to do with child. Return as necessary for exit 
+ * happened or what to do with child. Return as necessary for exit
  * or restart of child.
  */
 int
@@ -834,7 +909,7 @@ ssh_watch(int sock)
 			dolongjmp = 1;
 			alarm(secs_left);
 
-			/* In case we were signalled while setting 
+			/* In case we were signalled while setting
 			   all this up */
 			if (exit_signalled) {
 				errlog(LOG_INFO, "signalled to exit");
@@ -842,7 +917,35 @@ ssh_watch(int sock)
 				return P_EXITERR;
 			}
 
-			pause();
+			/*
+			 * Instead of pause() which only waits for
+			 * signals, use poll() on the SSH stderr pipe
+			 * so we can detect errors like "remote port
+			 * forwarding failed" immediately, rather than
+			 * waiting for the next poll_time interval.
+			 * If no stderr pipe, fall back to pause().
+			 */
+			if (ssh_stderr_fd >= 0) {
+				struct pollfd spfd;
+				spfd.fd = ssh_stderr_fd;
+				spfd.events = POLLIN;
+				/* poll with long timeout; SIGALRM
+				 * will interrupt with EINTR */
+				poll(&spfd, 1, secs_left * 1000);
+				if (spfd.revents & POLLIN) {
+					if (check_ssh_stderr()) {
+						ssh_kill();
+						errlog(LOG_INFO,
+						    "waiting %d seconds "
+						    "for port to be released",
+						    PORT_FWD_FAIL_DELAY);
+						sleep(PORT_FWD_FAIL_DELAY);
+						return P_RESTART;
+					}
+				}
+			} else {
+				pause();
+			}
 
 		} else {
 
@@ -858,7 +961,7 @@ ssh_watch(int sock)
 				break;
 			case SIGALRM:
 				r = exceeded_lifetime();
-				errlog(LOG_DEBUG, 
+				errlog(LOG_DEBUG,
 				    "received SIGALRM (end-of-life %d)", r);
 
 				/* exit if user-configured lifetime exceeded */
@@ -867,9 +970,21 @@ ssh_watch(int sock)
 					return P_EXITOK;
 				}
 
+				/* Check stderr for errors before
+				 * running the slower conn_test */
+				if (check_ssh_stderr()) {
+					ssh_kill();
+					errlog(LOG_INFO,
+					    "waiting %d seconds "
+					    "for port to be released",
+					    PORT_FWD_FAIL_DELAY);
+					sleep(PORT_FWD_FAIL_DELAY);
+					return P_RESTART;
+				}
+
 				if (writep && sock != -1 &&
 				    !conn_test(sock, mhost, writep)) {
-					errlog(LOG_INFO, 
+					errlog(LOG_INFO,
 					    "port down, restarting ssh");
 					ssh_kill();
 					return P_RESTART;
@@ -969,6 +1084,9 @@ ssh_wait(int options) {
 	time_t	now;
 
 	if (waitpid(cchild, &status, options) > 0) {
+		/* Drain any remaining stderr before analyzing exit */
+		check_ssh_stderr();
+
 		if (WIFSIGNALED(status)) {
 			switch(WTERMSIG(status)) {
 #if 0
@@ -1084,20 +1202,49 @@ ssh_kill(void)
 {
 	int w;
 	int status;
+	int waited;
+
+	if (ssh_stderr_fd >= 0) {
+		close(ssh_stderr_fd);
+		ssh_stderr_fd = -1;
+	}
 
 	if (cchild) {
-		/* overkill */
 		kill(cchild, SIGTERM);
-		/* if (kill(cchild, 0) != -1)
-		 +	kill(cchild, SIGKILL);
+
+		/*
+		 * Wait up to KILL_TIMEOUT seconds for the child to
+		 * exit after SIGTERM. If it doesn't, escalate to
+		 * SIGKILL to prevent hanging forever in waitpid().
 		 */
+		for (waited = 0; waited < KILL_TIMEOUT; waited++) {
+			errno = 0;
+			w = waitpid(cchild, &status, WNOHANG);
+			if (w > 0)
+				return;
+			if (w < 0 && errno != EINTR) {
+				errlog(LOG_ERR,
+				    "waitpid() not successful: %s",
+				    strerror(errno));
+				return;
+			}
+			sleep(1);
+		}
+
+		/* SIGTERM didn't work, escalate to SIGKILL */
+		errlog(LOG_WARNING,
+		    "ssh child %d did not exit after %d seconds, "
+		    "sending SIGKILL",
+		    (int)cchild, KILL_TIMEOUT);
+		kill(cchild, SIGKILL);
+
 		do {
 			errno = 0;
 			w = waitpid(cchild, &status, 0);
-		} while (w < 0 && errno == EINTR );
+		} while (w < 0 && errno == EINTR);
 
 		if (w <= 0) {
-			errlog(LOG_ERR, 
+			errlog(LOG_ERR,
 			    "waitpid() not successful: %s",
 			    strerror(errno));
 		}
@@ -1149,10 +1296,24 @@ grace_time(time_t last_start)
 		n = (int)((poll_time / 100.0) * (t * (t/3)));
 		interval = (n > poll_time) ? poll_time : n;
 		if (interval) {
-			errlog(LOG_DEBUG, 
+			errlog(LOG_DEBUG,
 			    "sleeping for grace time %d secs", interval);
 			sleep(interval);
 		}
+	}
+
+	/*
+	 * If the last SSH reported port forwarding failure,
+	 * enforce a minimum delay so the remote port has time
+	 * to be released before we attempt to bind it again.
+	 */
+	if (port_fwd_failed) {
+		errlog(LOG_INFO,
+		    "port forwarding failed on previous attempt, "
+		    "enforcing minimum %d second delay",
+		    PORT_FWD_FAIL_DELAY);
+		sleep(PORT_FWD_FAIL_DELAY);
+		port_fwd_failed = 0;
 	}
 	return;
 }
