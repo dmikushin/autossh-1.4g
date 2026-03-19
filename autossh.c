@@ -99,6 +99,7 @@ const char *rcsid = "$Id: autossh.c,v 1.91 2019/01/05 01:23:39 harding Exp $";
 #define KILL_TIMEOUT	10	/* seconds to wait for SIGTERM before SIGKILL */
 #define STDERR_BUF_SZ	4096	/* buffer for reading SSH stderr */
 #define PORT_FWD_FAIL_DELAY 5	/* seconds to wait before restart on port fwd failure */
+#define MAX_SESSION	0	/* default max session time per child (0 = no limit) */
 
 #define P_CONTINUE	0	/* continue monitoring */
 #define P_RESTART	1	/* restart ssh process */
@@ -133,6 +134,7 @@ int	first_poll_time = POLL_TIME; /* initial connection poll time */
 double	gate_time = GATE_TIME;	/* time to "make it out of the gate" */
 int	max_start = MAX_START;  /* how many times to run (default no limit) */
 double 	max_lifetime = MAX_LIFETIME; /* how long can the process/daemon live */
+double	max_session = MAX_SESSION; /* max time per ssh child session */
 int	net_timeout = TIMEO_NET; /* timeout on network data */
 char	*ssh_path = SSH_PATH;	/* default path to ssh */
 int	start_count;		/* # of times exec()d ssh */
@@ -234,9 +236,16 @@ usage(int code)
 		fprintf(stderr, 
 		    "    AUTOSSH_MAXLIFETIME "
 		    "- set the maximum time to live (seconds)\n");
-		fprintf(stderr, 
+		fprintf(stderr,
 		    "    AUTOSSH_MAXSTART    "
 		    "- max times to restart (default is no limit)\n");
+		fprintf(stderr,
+		    "    AUTOSSH_MAX_SESSION "
+		    "- max time for a single SSH session (seconds)\n"
+		    "                        "
+		    "  acts as a watchdog when SSH hangs; 0 = no\n"
+		    "                        "
+		    "  limit (default). Recommended with -M 0.\n");
 		fprintf(stderr, 
 		    "    AUTOSSH_MESSAGE     "
 		    "- message to append to echo string (max 64 bytes)\n");
@@ -687,6 +696,28 @@ get_env_args(void)
 		}
 	}
 
+	if ((s = getenv("AUTOSSH_MAX_SESSION")) != NULL) {
+		max_session = (double)strtoul(s, &t, 0);
+		if (*s == '\0' || *t != '\0')
+			xerrlog(LOG_ERR, "invalid max session time \"%s\"", s);
+		if (max_session > 0) {
+			if (poll_time > max_session) {
+				errlog(LOG_INFO,
+				    "poll time greater than max session, "
+				    "dropping poll time to %.0f",
+				    max_session);
+				poll_time = (int)max_session;
+			}
+			if (first_poll_time > max_session) {
+				errlog(LOG_INFO,
+				    "first poll time greater than max session, "
+				    "dropping first poll time to %.0f",
+				    max_session);
+				first_poll_time = (int)max_session;
+			}
+		}
+	}
+
 	if ((s = getenv("AUTOSSH_PIDFILE")) != NULL)
 		if (*s != '\0')
 			pid_file_name = s;
@@ -943,6 +974,17 @@ ssh_watch(int sock)
 						return P_RESTART;
 					}
 				}
+				/* If pipe closed (SSH exited/crashed)
+				 * or errored without readable data,
+				 * loop back to ssh_wait(WNOHANG) to
+				 * detect the dead child. */
+				if ((spfd.revents & (POLLHUP | POLLERR))
+				    && !(spfd.revents & POLLIN)) {
+					errlog(LOG_INFO,
+					    "SSH stderr pipe closed");
+					close(ssh_stderr_fd);
+					ssh_stderr_fd = -1;
+				}
 			} else {
 				pause();
 			}
@@ -968,6 +1010,25 @@ ssh_watch(int sock)
 				if (r) {
 					ssh_kill();
 					return P_EXITOK;
+				}
+
+				/* Kill and restart if per-child session
+				 * timeout exceeded. This is the watchdog
+				 * for -M 0 mode where conn_test is not
+				 * available, and SSH's own keepalive
+				 * (ServerAliveInterval) has failed. */
+				if (max_session > 0) {
+					time(&now);
+					if (difftime(now, start_time) >=
+					    max_session) {
+						errlog(LOG_WARNING,
+						    "ssh session exceeded "
+						    "max session time "
+						    "(%.0f secs); restarting",
+						    max_session);
+						ssh_kill();
+						return P_RESTART;
+					}
 				}
 
 				/* Check stderr for errors before
@@ -1238,16 +1299,34 @@ ssh_kill(void)
 		    (int)cchild, KILL_TIMEOUT);
 		kill(cchild, SIGKILL);
 
-		do {
+		/*
+		 * Wait with timeout for SIGKILL to take effect.
+		 * If the child is in D (uninterruptible) state,
+		 * even SIGKILL won't work immediately. Don't
+		 * block forever — abandon the child as a zombie.
+		 */
+		for (waited = 0; waited < KILL_TIMEOUT; waited++) {
 			errno = 0;
-			w = waitpid(cchild, &status, 0);
-		} while (w < 0 && errno == EINTR);
-
-		if (w <= 0) {
-			errlog(LOG_ERR,
-			    "waitpid() not successful: %s",
-			    strerror(errno));
+			w = waitpid(cchild, &status, WNOHANG);
+			if (w > 0) {
+				cchild = 0;
+				return;
+			}
+			if (w < 0 && errno != EINTR) {
+				errlog(LOG_ERR,
+				    "waitpid after SIGKILL: %s",
+				    strerror(errno));
+				cchild = 0;
+				return;
+			}
+			sleep(1);
 		}
+
+		errlog(LOG_ERR,
+		    "ssh child %d not dead after SIGKILL + %d seconds "
+		    "(likely in uninterruptible state); abandoning",
+		    (int)cchild, KILL_TIMEOUT);
+		cchild = 0;
 	}
 	return;
 }
