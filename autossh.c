@@ -150,6 +150,7 @@ char	**newav;
 
 int	cchild;			/* current child */
 int	ssh_stderr_fd = -1;	/* read end of SSH stderr pipe */
+time_t	pipe_lost_time;		/* when stderr pipe was lost (0 = pipe alive) */
 volatile sig_atomic_t	port_fwd_failed; /* SSH reported port forwarding failure */
 
 volatile sig_atomic_t   exit_signalled;  /* signalled outside of monitor loop */
@@ -241,11 +242,11 @@ usage(int code)
 		    "- max times to restart (default is no limit)\n");
 		fprintf(stderr,
 		    "    AUTOSSH_MAX_SESSION "
-		    "- max time for a single SSH session (seconds)\n"
+		    "- max seconds to wait for a stuck SSH child\n"
 		    "                        "
-		    "  acts as a watchdog when SSH hangs; 0 = no\n"
+		    "  after it stops responding (stderr pipe lost);\n"
 		    "                        "
-		    "  limit (default). Recommended with -M 0.\n");
+		    "  0 = no limit (default). Recommended with -M 0.\n");
 		fprintf(stderr, 
 		    "    AUTOSSH_MESSAGE     "
 		    "- message to append to echo string (max 64 bytes)\n");
@@ -700,22 +701,6 @@ get_env_args(void)
 		max_session = (double)strtoul(s, &t, 0);
 		if (*s == '\0' || *t != '\0')
 			xerrlog(LOG_ERR, "invalid max session time \"%s\"", s);
-		if (max_session > 0) {
-			if (poll_time > max_session) {
-				errlog(LOG_INFO,
-				    "poll time greater than max session, "
-				    "dropping poll time to %.0f",
-				    max_session);
-				poll_time = (int)max_session;
-			}
-			if (first_poll_time > max_session) {
-				errlog(LOG_INFO,
-				    "first poll time greater than max session, "
-				    "dropping first poll time to %.0f",
-				    max_session);
-				first_poll_time = (int)max_session;
-			}
-		}
 	}
 
 	if ((s = getenv("AUTOSSH_PIDFILE")) != NULL)
@@ -776,6 +761,7 @@ ssh_run(int sock, char **av)
 		}
 		time(&start_time);
 		port_fwd_failed = 0;
+		pipe_lost_time = 0;
 		if (max_start < 0)
 			errlog(LOG_INFO, "starting ssh (count %d)",
 			   start_count);
@@ -977,13 +963,16 @@ ssh_watch(int sock)
 				/* If pipe closed (SSH exited/crashed)
 				 * or errored without readable data,
 				 * loop back to ssh_wait(WNOHANG) to
-				 * detect the dead child. */
+				 * detect the dead child. Start the
+				 * watchdog timer if max_session is set. */
 				if ((spfd.revents & (POLLHUP | POLLERR))
 				    && !(spfd.revents & POLLIN)) {
 					errlog(LOG_INFO,
 					    "SSH stderr pipe closed");
 					close(ssh_stderr_fd);
 					ssh_stderr_fd = -1;
+					if (pipe_lost_time == 0)
+						time(&pipe_lost_time);
 				}
 			} else {
 				pause();
@@ -1012,20 +1001,25 @@ ssh_watch(int sock)
 					return P_EXITOK;
 				}
 
-				/* Kill and restart if per-child session
-				 * timeout exceeded. This is the watchdog
-				 * for -M 0 mode where conn_test is not
-				 * available, and SSH's own keepalive
-				 * (ServerAliveInterval) has failed. */
-				if (max_session > 0) {
+				/*
+				 * Watchdog for stuck SSH, primarily for
+				 * -M 0 mode where conn_test is unavailable.
+				 * Only triggers when the stderr pipe has
+				 * been lost (SSH is likely dead/dying but
+				 * hasn't exited) and max_session seconds
+				 * have passed since pipe loss. This avoids
+				 * killing healthy connections.
+				 */
+				if (max_session > 0 && pipe_lost_time != 0) {
 					time(&now);
-					if (difftime(now, start_time) >=
+					if (difftime(now, pipe_lost_time) >=
 					    max_session) {
 						errlog(LOG_WARNING,
-						    "ssh session exceeded "
-						    "max session time "
-						    "(%.0f secs); restarting",
-						    max_session);
+						    "ssh child stuck for "
+						    "%.0f secs after stderr "
+						    "pipe lost; restarting",
+						    difftime(now,
+						        pipe_lost_time));
 						ssh_kill();
 						return P_RESTART;
 					}
