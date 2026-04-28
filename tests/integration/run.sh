@@ -79,25 +79,43 @@ test_sigterm_immune_child() {
     assert_log_contains "sending SIGKILL" || return 1
 }
 
-# Double-SIGINT force-exit: second SIGINT must trigger _exit(1).
+# Double-SIGINT force-exit: the second SIGINT during shutdown must
+# trigger _exit(1) immediately, bypassing the up-to-4-second
+# ssh_kill grace period.
+#
+# rc==1 alone is not a strong signal because the normal SIGINT path
+# also exits 1 (P_EXITERR -> exit(1) in main). What distinguishes
+# force-exit is *timing*: with a SIGTERM-immune mock, the normal
+# path takes ~SIGTERM_GRACE+SIGKILL_WAIT (~2-4s) to complete the
+# kill escalation, while force-exit takes <1s.
 test_double_sigint_force_exit() {
     export MOCK_SSH_MODE=slow-on-sigterm
     export AUTOSSH_GATETIME=0
     run_autossh_async -M 0 -N user@dummy
 
     sleep 1
+    t0_ms=$(date +%s%N | cut -c1-13)
     kill -INT "$AUTO_PID"
-    sleep 0.1
+    sleep 0.2
     kill -INT "$AUTO_PID" 2>/dev/null || true
-    wait_autossh_with_timeout 3
+    wait_autossh_with_timeout 4
     rc=$?
+    t1_ms=$(date +%s%N | cut -c1-13)
+    elapsed_ms=$((t1_ms - t0_ms))
+
     if [ $rc -eq 124 ]; then
-        echo "  double-SIGINT did not force exit"
+        echo "  did not exit at all"
         return 1
     fi
-    # _exit(1) means exit status 1
     if [ $rc -ne 1 ]; then
-        echo "  unexpected exit status $rc (expected 1)"
+        echo "  unexpected exit status $rc (expected 1 from _exit(1)), elapsed ${elapsed_ms}ms"
+        return 1
+    fi
+    # The whole point of the fix: must be FAST, not the ~2s of
+    # ssh_kill's escalation. We sent the 2nd SIGINT 0.2s in, so the
+    # total elapsed must be well under 1s.
+    if [ $elapsed_ms -gt 1000 ]; then
+        echo "  too slow: ${elapsed_ms}ms (>= 1000ms — looks like normal SIGINT path, not force-exit)"
         return 1
     fi
 }

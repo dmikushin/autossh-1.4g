@@ -56,17 +56,19 @@ run_autossh_async() {
 }
 
 # Wait up to N seconds for autossh to exit; return its status, or
-# 124 if it never did.
+# 124 if it never did. Polls at 50ms granularity so sub-second
+# exits are accurately measurable.
 wait_autossh_with_timeout() {
     timeout="$1"
-    elapsed=0
-    while [ $elapsed -lt $timeout ]; do
+    waited_ms=0
+    timeout_ms=$((timeout * 1000))
+    while [ $waited_ms -lt $timeout_ms ]; do
         if ! kill -0 "$AUTO_PID" 2>/dev/null; then
             wait "$AUTO_PID" 2>/dev/null
             return $?
         fi
-        sleep 1
-        elapsed=$((elapsed + 1))
+        sleep 0.05
+        waited_ms=$((waited_ms + 50))
     done
     return 124
 }
