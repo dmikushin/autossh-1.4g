@@ -96,10 +96,11 @@ const char *rcsid = "$Id: autossh.c,v 1.91 2019/01/05 01:23:39 harding Exp $";
 #define MAX_CONN_TRIES	3	/* how many attempts */
 #define MAX_START	(-1)	/* max # of runs; <0 == forever */
 #define MAX_MESSAGE	64	/* max length of message we can add */
-#define KILL_TIMEOUT	10	/* seconds to wait for SIGTERM before SIGKILL */
+#define SIGTERM_GRACE	2	/* seconds to wait for SIGTERM before SIGKILL */
+#define SIGKILL_WAIT	2	/* seconds to wait for SIGKILL before abandoning */
 #define STDERR_BUF_SZ	4096	/* buffer for reading SSH stderr */
 #define PORT_FWD_FAIL_DELAY 5	/* seconds to wait before restart on port fwd failure */
-#define MAX_SESSION	0	/* default max session time per child (0 = no limit) */
+#define MAX_SESSION	0	/* default max stderr silence (0 = no watchdog) */
 
 #define P_CONTINUE	0	/* continue monitoring */
 #define P_RESTART	1	/* restart ssh process */
@@ -151,6 +152,7 @@ char	**newav;
 int	cchild;			/* current child */
 int	ssh_stderr_fd = -1;	/* read end of SSH stderr pipe */
 time_t	pipe_lost_time;		/* when stderr pipe was lost (0 = pipe alive) */
+time_t	last_stderr_time;	/* last time we read data from SSH stderr */
 volatile sig_atomic_t	port_fwd_failed; /* SSH reported port forwarding failure */
 
 volatile sig_atomic_t   exit_signalled;  /* signalled outside of monitor loop */
@@ -242,11 +244,13 @@ usage(int code)
 		    "- max times to restart (default is no limit)\n");
 		fprintf(stderr,
 		    "    AUTOSSH_MAX_SESSION "
-		    "- max seconds to wait for a stuck SSH child\n"
+		    "- max seconds SSH may be silent on stderr (or stuck\n"
 		    "                        "
-		    "  after it stops responding (stderr pipe lost);\n"
+		    "  after stderr pipe loss) before being considered\n"
 		    "                        "
-		    "  0 = no limit (default). Recommended with -M 0.\n");
+		    "  stuck and killed. 0 = no watchdog (default).\n"
+		    "                        "
+		    "  Recommended with -M 0.\n");
 		fprintf(stderr, 
 		    "    AUTOSSH_MESSAGE     "
 		    "- message to append to echo string (max 64 bytes)\n");
@@ -762,6 +766,7 @@ ssh_run(int sock, char **av)
 		time(&start_time);
 		port_fwd_failed = 0;
 		pipe_lost_time = 0;
+		time(&last_stderr_time);
 		if (max_start < 0)
 			errlog(LOG_INFO, "starting ssh (count %d)",
 			   start_count);
@@ -853,6 +858,7 @@ check_ssh_stderr(void)
 
 	while ((n = read(ssh_stderr_fd, buf, sizeof(buf) - 1)) > 0) {
 		buf[n] = '\0';
+		time(&last_stderr_time);
 		/* Forward to our stderr so user sees the messages */
 		if (write(STDERR_FILENO, buf, n) < 0) {
 			/* ignore write errors on stderr */
@@ -919,6 +925,14 @@ ssh_watch(int sock)
 				if (secs_to_shutdown < poll_time)
 					secs_left = secs_to_shutdown;
 			}
+
+			/*
+			 * If a stuck-SSH watchdog is configured, ensure the
+			 * alarm wakes us at least that often, so the SIGALRM
+			 * handler can check stderr silence in time.
+			 */
+			if (max_session > 0 && secs_left > max_session)
+				secs_left = max_session;
 
 			errlog(LOG_DEBUG, 
 			    "set alarm for %d secs", secs_left);
@@ -1004,15 +1018,16 @@ ssh_watch(int sock)
 				/*
 				 * Watchdog for stuck SSH, primarily for
 				 * -M 0 mode where conn_test is unavailable.
-				 * Only triggers when the stderr pipe has
-				 * been lost (SSH is likely dead/dying but
-				 * hasn't exited) and max_session seconds
-				 * have passed since pipe loss. This avoids
-				 * killing healthy connections.
+				 * Two triggers, both gated by max_session > 0:
+				 *   (1) stderr pipe lost and silent for too long;
+				 *   (2) stderr pipe alive but ssh produced no
+				 *       output for too long (e.g., stuck in
+				 *       initial connect()).
 				 */
-				if (max_session > 0 && pipe_lost_time != 0) {
+				if (max_session > 0) {
 					time(&now);
-					if (difftime(now, pipe_lost_time) >=
+					if (pipe_lost_time != 0 &&
+					    difftime(now, pipe_lost_time) >=
 					    max_session) {
 						errlog(LOG_WARNING,
 						    "ssh child stuck for "
@@ -1020,6 +1035,19 @@ ssh_watch(int sock)
 						    "pipe lost; restarting",
 						    difftime(now,
 						        pipe_lost_time));
+						ssh_kill();
+						return P_RESTART;
+					}
+					if (last_stderr_time != 0 &&
+					    difftime(now, last_stderr_time) >=
+					    max_session) {
+						errlog(LOG_WARNING,
+						    "ssh child silent on "
+						    "stderr for %.0f secs; "
+						    "considered stuck, "
+						    "restarting",
+						    difftime(now,
+						        last_stderr_time));
 						ssh_kill();
 						return P_RESTART;
 					}
@@ -1248,9 +1276,10 @@ ssh_wait(int options) {
 }
 
 /*
- * Kill ssh child. This can be overly aggressive, and
- * result in kill KILL before TERM has time to take....
- * Perhaps just use TERM?
+ * Kill ssh child. Aggressive: short SIGTERM grace, then SIGKILL.
+ * If the child is stuck (e.g., D-state on a kernel TCP connect),
+ * we abandon it after a short wait rather than blocking the parent
+ * indefinitely.
  */
 void
 ssh_kill(void)
@@ -1268,48 +1297,58 @@ ssh_kill(void)
 		kill(cchild, SIGTERM);
 
 		/*
-		 * Wait up to KILL_TIMEOUT seconds for the child to
-		 * exit after SIGTERM. If it doesn't, escalate to
-		 * SIGKILL to prevent hanging forever in waitpid().
+		 * Short grace for SIGTERM. We do not loop sleep(1) here
+		 * because that makes Ctrl+C feel unresponsive. Instead,
+		 * a single short sleep then check.
 		 */
-		for (waited = 0; waited < KILL_TIMEOUT; waited++) {
-			errno = 0;
-			w = waitpid(cchild, &status, WNOHANG);
-			if (w > 0)
-				return;
-			if (w < 0 && errno != EINTR) {
-				errlog(LOG_ERR,
-				    "waitpid() not successful: %s",
-				    strerror(errno));
-				return;
-			}
-			sleep(1);
-		}
-
-		/* SIGTERM didn't work, escalate to SIGKILL */
-		errlog(LOG_WARNING,
-		    "ssh child %d did not exit after %d seconds, "
-		    "sending SIGKILL",
-		    (int)cchild, KILL_TIMEOUT);
-		kill(cchild, SIGKILL);
-
-		/*
-		 * Wait with timeout for SIGKILL to take effect.
-		 * If the child is in D (uninterruptible) state,
-		 * even SIGKILL won't work immediately. Don't
-		 * block forever — abandon the child as a zombie.
-		 */
-		for (waited = 0; waited < KILL_TIMEOUT; waited++) {
+		for (waited = 0; waited < SIGTERM_GRACE; waited++) {
 			errno = 0;
 			w = waitpid(cchild, &status, WNOHANG);
 			if (w > 0) {
 				cchild = 0;
 				return;
 			}
-			if (w < 0 && errno != EINTR) {
+			if (w < 0 && errno != EINTR && errno != ECHILD) {
+				errlog(LOG_ERR,
+				    "waitpid: %s", strerror(errno));
+				cchild = 0;
+				return;
+			}
+			if (w < 0 && errno == ECHILD) {
+				/* already reaped */
+				cchild = 0;
+				return;
+			}
+			sleep(1);
+		}
+
+		/* SIGTERM didn't work, escalate to SIGKILL fast */
+		errlog(LOG_WARNING,
+		    "ssh child %d did not exit after %d seconds, "
+		    "sending SIGKILL",
+		    (int)cchild, SIGTERM_GRACE);
+		kill(cchild, SIGKILL);
+
+		/*
+		 * Short wait for SIGKILL to take effect. If the child
+		 * is in D-state, even SIGKILL won't reap it immediately;
+		 * abandon rather than blocking the parent forever.
+		 */
+		for (waited = 0; waited < SIGKILL_WAIT; waited++) {
+			errno = 0;
+			w = waitpid(cchild, &status, WNOHANG);
+			if (w > 0) {
+				cchild = 0;
+				return;
+			}
+			if (w < 0 && errno != EINTR && errno != ECHILD) {
 				errlog(LOG_ERR,
 				    "waitpid after SIGKILL: %s",
 				    strerror(errno));
+				cchild = 0;
+				return;
+			}
+			if (w < 0 && errno == ECHILD) {
 				cchild = 0;
 				return;
 			}
@@ -1319,7 +1358,7 @@ ssh_kill(void)
 		errlog(LOG_ERR,
 		    "ssh child %d not dead after SIGKILL + %d seconds "
 		    "(likely in uninterruptible state); abandoning",
-		    (int)cchild, KILL_TIMEOUT);
+		    (int)cchild, SIGKILL_WAIT);
 		cchild = 0;
 	}
 	return;
@@ -1467,14 +1506,24 @@ unset_sig_handlers(void)
 
 /*
  * If we're primed, longjump back.
+ *
+ * If a termination signal (SIGINT/SIGTERM) arrives a second time
+ * while exit is already in progress, the user is impatient — bail
+ * out hard with _exit() rather than letting the orderly shutdown
+ * (which may itself be stuck in waitpid/sleep loops) drag on.
  */
 void
 sig_catch(int sig)
 {
 	if (sig == SIGUSR1)
 		restart_ssh = 1;
-	else if (sig == SIGTERM || sig == SIGINT)
+	else if (sig == SIGTERM || sig == SIGINT) {
+		if (exit_signalled) {
+			/* second termination signal — force exit */
+			_exit(1);
+		}
 		exit_signalled = 1;
+	}
 	if (dolongjmp) {
 		dolongjmp = 0;
 		siglongjmp(jumpbuf, sig);
