@@ -237,10 +237,22 @@ int __wrap_poll(struct pollfd *fds, nfds_t nfds, int timeout)
     mock_poll_call_count++;
     mock_poll_last_timeout_ms = timeout;
 
+    if (nfds > MOCK_POLL_MAX_FDS) {
+        fprintf(stderr,
+            "  FAIL mock_poll: nfds=%lu exceeds MOCK_POLL_MAX_FDS=%d "
+            "(extend mocks.h if you need more)\n",
+            (unsigned long)nfds, MOCK_POLL_MAX_FDS);
+        fflush(stderr);
+        exit(1);
+    }
+
     if (mock_poll_qpos < mock_poll_qlen) {
         struct mock_poll_result r = mock_poll_queue[mock_poll_qpos++];
-        if (nfds > 0 && fds)
-            fds[0].revents = r.revents;
+        nfds_t i;
+        for (i = 0; i < nfds && i < MOCK_POLL_MAX_FDS; i++) {
+            if (fds)
+                fds[i].revents = r.revents[i];
+        }
         if (r.advance_time > 0)
             mock_current_time += r.advance_time;
         if (r.raise_sig > 0) {
@@ -256,8 +268,11 @@ int __wrap_poll(struct pollfd *fds, nfds_t nfds, int timeout)
         return r.ret;
     }
     /* exhausted: simulate timeout */
-    if (nfds > 0 && fds)
-        fds[0].revents = 0;
+    nfds_t i;
+    for (i = 0; i < nfds && i < MOCK_POLL_MAX_FDS; i++) {
+        if (fds)
+            fds[i].revents = 0;
+    }
     return 0;
 }
 

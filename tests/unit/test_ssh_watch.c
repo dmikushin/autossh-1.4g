@@ -73,7 +73,7 @@ static void setup(void)
 
 static void enq_poll(short revents, int ret)
 {
-    mock_poll_queue[mock_poll_qlen].revents = revents;
+    mock_poll_queue[mock_poll_qlen].revents[0] = revents;
     mock_poll_queue[mock_poll_qlen].ret     = ret;
     mock_poll_qlen++;
 }
@@ -244,7 +244,7 @@ TEST(sigalrm_silence_watchdog_kills_child)
     /* WNOHANG: child still alive */
     enq_waitpid(0, 0);
     /* poll() simulates SIGALRM mid-call */
-    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].revents[0] = 0;
     mock_poll_queue[mock_poll_qlen].ret       = 0;
     mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;
     mock_poll_qlen++;
@@ -269,7 +269,7 @@ TEST(sigalrm_pipe_lost_watchdog_kills_child)
     last_stderr_time  = mock_current_time;
 
     enq_waitpid(0, 0);
-    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].revents[0] = 0;
     mock_poll_queue[mock_poll_qlen].ret       = 0;
     mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;
     mock_poll_qlen++;
@@ -291,7 +291,7 @@ TEST(sigalrm_no_silence_does_not_kill)
     last_stderr_time  = mock_current_time;
 
     enq_waitpid(0, 0);                          /* WNOHANG: alive */
-    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].revents[0] = 0;
     mock_poll_queue[mock_poll_qlen].ret       = 0;
     mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;  /* triggers else-branch */
     mock_poll_qlen++;

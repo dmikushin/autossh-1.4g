@@ -110,9 +110,10 @@ extern int          mock_write_fd_filter;
 
 /* ---- poll ---------------------------------------------------- */
 /*
- * Programmable queue of poll() results. Each entry sets a single
- * fd's revents and a return value (0=timeout, >0=count, <0=err).
- * For multi-fd polls (conn_test) we record only entry index 0.
+ * Programmable queue of poll() results. Each entry sets revents
+ * for up to 2 pollfds and the return value (0=timeout, >0=count,
+ * <0=err). conn_test() uses 2 fds; if a future test needs more,
+ * extend revents[] here.
  *
  * raise_sig: if non-zero, before returning the mock invokes
  * sig_catch(raise_sig). With dolongjmp=1 (as set by ssh_watch)
@@ -121,8 +122,9 @@ extern int          mock_write_fd_filter;
  * a blocking syscall in unit tests.
  */
 #define MOCK_POLL_MAX 16
+#define MOCK_POLL_MAX_FDS 2
 struct mock_poll_result {
-    short revents;     /* applied to pollfd[0] */
+    short revents[MOCK_POLL_MAX_FDS]; /* applied to pollfd[i] */
     int   ret;         /* return value of poll() */
     int   err;         /* errno when ret < 0 */
     int   advance_time; /* if > 0, mock_current_time += this */
