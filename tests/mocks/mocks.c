@@ -68,11 +68,19 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options)
             errno = r.err;
         return r.ret;
     }
-    /* exhausted queue: act as ECHILD */
-    if (status)
-        *status = 0;
-    errno = ECHILD;
-    return -1;
+    /*
+     * Queue exhausted. Fail loudly so tests can't accidentally
+     * pass by under-enqueuing — previously we silently returned
+     * ECHILD with *status=0, which masks both unexpected extra
+     * waitpid calls and the difference between "real reap with
+     * exit-status 0" and "queue empty".
+     */
+    fprintf(stderr,
+        "  FAIL mock_waitpid: queue exhausted at call #%d "
+        "(test under-enqueued; expected %d entries)\n",
+        mock_waitpid_call_count, mock_waitpid_qlen);
+    fflush(stderr);
+    exit(1);
 }
 
 /* ---- sleep --------------------------------------------------- */
