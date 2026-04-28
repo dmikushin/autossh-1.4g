@@ -55,6 +55,10 @@ $(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ
 	$(CC) $(CFLAGS) $(LDFLAGS) $(WRAP_FLAGS) -o $@ $^ $(LIBS)
 
 check: $(UNIT_BINS)
+	@# UNIT_BINS expands word-split into the for-loop. Make itself
+	@# can't handle whitespace in source-tree paths, so we don't
+	@# either. The "$$t" quoting below is what guards binary names
+	@# with spaces if a future fix lets Make handle them.
 	@fail=0; pass=0; \
 	for t in $(UNIT_BINS); do \
 		if "$$t"; then pass=$$((pass+1)); else fail=$$((fail+1)); fi; \
