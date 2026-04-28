@@ -90,13 +90,19 @@ extern const char *_current_test_name;
 
 /*
  * Run a single test in a forked child. The child does setup → body
- * → _exit(0). On any assertion failure or unexpected death, exit
+ * → exit(0). On any assertion failure or unexpected death, exit
  * status is non-zero and the parent records the failure.
+ *
+ * Note: we call __real_waitpid because the test binary is linked
+ * with -Wl,--wrap=waitpid (so autossh's internal waitpid is mocked).
+ * The framework's own fork/wait must bypass that wrap.
  *
  * forking also gives us isolation of global state in autossh.c
  * (newav, cchild, exit_signalled, …) so tests don't bleed into each
  * other.
  */
+extern pid_t __real_waitpid(pid_t pid, int *wstatus, int options);
+
 #define RUN_TEST(name) do {                                             \
     fflush(stdout);                                                     \
     fflush(stderr);                                                     \
@@ -107,7 +113,7 @@ extern const char *_current_test_name;
         exit(0);                                                        \
     } else if (_pid > 0) {                                              \
         int _st = 0;                                                    \
-        waitpid(_pid, &_st, 0);                                         \
+        __real_waitpid(_pid, &_st, 0);                                  \
         if (WIFEXITED(_st) && WEXITSTATUS(_st) == 0) {                  \
             printf("  PASS %s\n", #name);                               \
             TESTS_PASSED++;                                             \
