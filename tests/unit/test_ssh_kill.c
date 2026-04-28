@@ -121,12 +121,18 @@ TEST(echild_short_circuits)
     ASSERT_EQ(cchild, 0);
 }
 
-TEST(total_sleep_bounded_by_4_seconds)
+TEST(kill_completes_within_4_seconds_for_stuck_child)
 {
     /*
-     * Sanity: even worst-case (stuck child) cannot sleep more than
-     * SIGTERM_GRACE + SIGKILL_WAIT = 4 seconds total. This is the
-     * whole point of the recent fix (was 20s).
+     * Even worst-case (child stays alive through both SIGTERM and
+     * SIGKILL waits) ssh_kill must not sleep more than 4 seconds
+     * total. This is the contract the recent fix established
+     * (was 20s before).
+     *
+     * The hardcoded "4" is intentional: a regression that bumped
+     * SIGTERM_GRACE/SIGKILL_WAIT back up would fail this assertion
+     * with mock_sleep_total_secs of 6, 12, 20 — independent of
+     * the constants' current values.
      */
     setup(0);
     int i;
@@ -154,6 +160,6 @@ TEST_SUITE_BEGIN("ssh_kill")
     RUN_TEST(escalates_to_sigkill_when_term_ignored);
     RUN_TEST(abandons_after_sigkill_doesnt_reap);
     RUN_TEST(echild_short_circuits);
-    RUN_TEST(total_sleep_bounded_by_4_seconds);
+    RUN_TEST(kill_completes_within_4_seconds_for_stuck_child);
     RUN_TEST(unexpected_waitpid_error_aborts_cleanly);
 TEST_SUITE_END
