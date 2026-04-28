@@ -142,11 +142,10 @@ test_port_fwd_fail() {
 # exercised by test_watchdog_silence (which restarts due to silence)
 # and test_port_fwd_fail (which restarts due to detected error). A
 # dedicated quick-exit-255 stress test was removed because it
-# triggers a known race in autossh: SIGCHLD delivered between
-# ssh_wait(WNOHANG) and dolongjmp=1 is silently consumed, leading to
-# poll() blocking until alarm fires. That race is orthogonal to our
-# recent fixes; documenting it here so it isn't re-added without a
-# separate fix.
+# triggers a SIGCHLD race documented in KNOWN_ISSUES.md (race
+# between ssh_wait(WNOHANG) and dolongjmp=1). That race is
+# orthogonal to the test infrastructure — see KNOWN_ISSUES.md for
+# the proper ppoll/sigsuspend fix sketch.
 
 # max_lifetime causes graceful shutdown.
 test_max_lifetime() {

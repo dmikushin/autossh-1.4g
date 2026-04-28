@@ -897,6 +897,16 @@ ssh_watch(int sock)
 	    (int)cchild, start_count);
 #endif
 
+	/*
+	 * KNOWN ISSUE: SIGCHLD race between ssh_wait(WNOHANG) and
+	 * dolongjmp=1. If the child exits in that window, sig_catch
+	 * runs with dolongjmp==0 and returns without longjmp; the
+	 * signal is lost and poll()/pause() then blocks for up to
+	 * secs_left seconds before noticing the dead child. See
+	 * KNOWN_ISSUES.md for analysis and a proposed ppoll/sigsuspend
+	 * fix. Workaround: set AUTOSSH_POLL to a small value.
+	 */
+
 	for (;;) {
 		if (restart_ssh) {
 			errlog(LOG_INFO, "signalled to kill and restart ssh");
