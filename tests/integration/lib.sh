@@ -2,8 +2,13 @@
 #
 # Common helpers for integration tests. Each test sources this.
 # Provides: setup_test, run_autossh_async, kill_autossh, assert_*.
-
-set -e
+#
+# We intentionally do NOT use `set -e` here. POSIX's set -e
+# semantics interact awkwardly with the `if "$@"; then` dispatch
+# in run_it_test: simple commands inside the called function may
+# or may not trigger an exit depending on subtle context rules,
+# and behaviour differs across shells. Each test function instead
+# uses explicit `|| return 1` and `return 1` after error checks.
 
 # Resolve to absolute paths relative to this file's directory.
 INT_DIR="$(cd "$(dirname "$0")" && pwd)"
