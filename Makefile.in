@@ -34,8 +34,12 @@ all:		$(TARGET)
 $(TARGET):	$(OFILES)
 		$(CC) $(CPPFLAGS) $(LDFLAGS) -o $(TARGET) $(OFILES) $(LIBS)
 
+check:		$(TARGET)
+		$(MAKE) -C tests check
+
 clean:
 		- /bin/rm -f *.o *.a *.core *~
+		- $(MAKE) -C tests clean 2>/dev/null || true
 
 allclean:	clean
 		- /bin/rm -f $(TARGET)

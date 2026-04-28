@@ -1,0 +1,16 @@
+# build outputs
+/Makefile
+/autossh
+/autossh.o
+/config.h
+/config.log
+/config.status
+autom4te.cache/
+
+# tests build artifacts
+/tests/build/
+/tests/unit/test_*
+!/tests/unit/test_*.c
+*.gcda
+*.gcno
+*.gcov

@@ -284,6 +284,7 @@ usage(int code)
 	exit(code);
 }
 
+#ifndef UNIT_TEST_NO_MAIN
 int
 main(int argc, char **argv)
 {
@@ -524,6 +525,7 @@ main(int argc, char **argv)
 		exit(1);
 	exit(0);
 }
+#endif /* UNIT_TEST_NO_MAIN */
 
 /*
  * Add an argument to the argument array.
