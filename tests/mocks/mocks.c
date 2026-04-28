@@ -190,7 +190,9 @@ ssize_t __wrap_write(int fd, const void *buf, size_t count)
 
 /* ---- getenv -------------------------------------------------- */
 struct mock_env_entry mock_env[MOCK_GETENV_MAX];
-int                   mock_env_count = 0;void mock_setenv(const char *name, const char *value)
+int                   mock_env_count = 0;
+
+void mock_setenv(const char *name, const char *value)
 {
     int i;
     for (i = 0; i < mock_env_count; i++) {
