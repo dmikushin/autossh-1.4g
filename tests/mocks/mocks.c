@@ -221,6 +221,9 @@ int                     mock_poll_qpos        = 0;
 int                     mock_poll_call_count  = 0;
 int                     mock_poll_last_timeout_ms = 0;
 
+/* For raise_sig: invoke autossh's signal handler directly. */
+extern void sig_catch(int sig);
+
 int __wrap_poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
     mock_poll_call_count++;
@@ -232,6 +235,14 @@ int __wrap_poll(struct pollfd *fds, nfds_t nfds, int timeout)
             fds[0].revents = r.revents;
         if (r.advance_time > 0)
             mock_current_time += r.advance_time;
+        if (r.raise_sig > 0) {
+            /*
+             * Simulate signal delivery during the syscall. If
+             * dolongjmp is set, sig_catch will siglongjmp out and
+             * this function never returns.
+             */
+            sig_catch(r.raise_sig);
+        }
         if (r.ret < 0)
             errno = r.err;
         return r.ret;

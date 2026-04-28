@@ -113,6 +113,12 @@ extern int          mock_write_fd_filter;
  * Programmable queue of poll() results. Each entry sets a single
  * fd's revents and a return value (0=timeout, >0=count, <0=err).
  * For multi-fd polls (conn_test) we record only entry index 0.
+ *
+ * raise_sig: if non-zero, before returning the mock invokes
+ * sig_catch(raise_sig). With dolongjmp=1 (as set by ssh_watch)
+ * this triggers siglongjmp back to the caller's jumpbuf — the
+ * canonical way to simulate a kernel-delivered signal during
+ * a blocking syscall in unit tests.
  */
 #define MOCK_POLL_MAX 16
 struct mock_poll_result {
@@ -120,6 +126,7 @@ struct mock_poll_result {
     int   ret;         /* return value of poll() */
     int   err;         /* errno when ret < 0 */
     int   advance_time; /* if > 0, mock_current_time += this */
+    int   raise_sig;   /* if > 0, call sig_catch(raise_sig) */
 };
 extern struct mock_poll_result mock_poll_queue[MOCK_POLL_MAX];
 extern int                     mock_poll_qlen;

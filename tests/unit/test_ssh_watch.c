@@ -223,6 +223,90 @@ TEST(port_fwd_failed_pattern_triggers_restart)
     ASSERT_TRUE(mock_sleep_total_secs >= 5);
 }
 
+/* ---- SIGALRM watchdog: stderr silence ---- */
+/*
+ * Drive ssh_watch into the SIGALRM branch by having mock poll()
+ * inject a synthetic SIGALRM via sig_catch. With max_session set
+ * and last_stderr_time stale (past max_session), the watchdog must
+ * kill the child and return P_RESTART.
+ *
+ * This is the unit-level guard for the recent stderr-silence fix
+ * — without it, the only test of that branch is integration.
+ */
+TEST(sigalrm_silence_watchdog_kills_child)
+{
+    setup();
+    max_session       = 5;
+    /* Pretend ssh hasn't said anything for 10 seconds. */
+    last_stderr_time  = mock_current_time - 10;
+    pipe_lost_time    = 0;
+
+    /* WNOHANG: child still alive */
+    enq_waitpid(0, 0);
+    /* poll() simulates SIGALRM mid-call */
+    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].ret       = 0;
+    mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;
+    mock_poll_qlen++;
+    /* ssh_kill: child reaps fast */
+    enq_waitpid(CHILD_PID, 0);
+
+    int rc = ssh_watch(-1);
+    ASSERT_EQ(rc, P_RESTART);
+    /* ssh_kill must have been called: SIGTERM at least */
+    ASSERT_TRUE(mock_kill_call_count >= 1);
+    ASSERT_EQ(mock_kill_calls[0].sig, SIGTERM);
+}
+
+/* ---- SIGALRM watchdog: pipe-lost branch ---- */
+TEST(sigalrm_pipe_lost_watchdog_kills_child)
+{
+    setup();
+    max_session       = 5;
+    /* Pipe lost 10 seconds ago, but stderr_time is recent (so the
+     * silence branch shouldn't fire — only the pipe-lost one). */
+    pipe_lost_time    = mock_current_time - 10;
+    last_stderr_time  = mock_current_time;
+
+    enq_waitpid(0, 0);
+    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].ret       = 0;
+    mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;
+    mock_poll_qlen++;
+    enq_waitpid(CHILD_PID, 0);
+
+    int rc = ssh_watch(-1);
+    ASSERT_EQ(rc, P_RESTART);
+    ASSERT_TRUE(mock_kill_call_count >= 1);
+}
+
+/* ---- SIGALRM with healthy state: no kill, loop continues ---- */
+TEST(sigalrm_no_silence_does_not_kill)
+{
+    setup();
+    max_session       = 60;
+    pipe_lost_time    = 0;
+    /* Recent stderr activity (no advance of mock_current_time after
+     * this) → watchdog should NOT fire. */
+    last_stderr_time  = mock_current_time;
+
+    enq_waitpid(0, 0);                          /* WNOHANG: alive */
+    mock_poll_queue[mock_poll_qlen].revents   = 0;
+    mock_poll_queue[mock_poll_qlen].ret       = 0;
+    mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;  /* triggers else-branch */
+    mock_poll_qlen++;
+    /* After SIGALRM branch falls through with no action, loop
+     * continues. Provide a reaped child on the next WNOHANG so
+     * we exit cleanly with P_EXITOK. start_count=2 in setup so
+     * the gate_time premature-exit check is bypassed. */
+    enq_waitpid(CHILD_PID, 0);
+
+    int rc = ssh_watch(-1);
+    ASSERT_EQ(rc, P_EXITOK);
+    /* No watchdog kill should have happened */
+    ASSERT_EQ(mock_kill_call_count, 0);
+}
+
 TEST_SUITE_BEGIN("ssh_watch")
     RUN_TEST(exit_signalled_returns_exiterr);
     RUN_TEST(restart_ssh_flag_returns_restart);
@@ -232,4 +316,7 @@ TEST_SUITE_BEGIN("ssh_watch")
     RUN_TEST(alarm_uses_first_poll_time_when_no_max_session);
     RUN_TEST(pollhup_closes_pipe_and_records_loss);
     RUN_TEST(port_fwd_failed_pattern_triggers_restart);
+    RUN_TEST(sigalrm_silence_watchdog_kills_child);
+    RUN_TEST(sigalrm_pipe_lost_watchdog_kills_child);
+    RUN_TEST(sigalrm_no_silence_does_not_kill);
 TEST_SUITE_END
