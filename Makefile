@@ -3,7 +3,7 @@
 # wrappers for users with the autoconf habit (`./configure && make
 # install`).
 
-VER     := 1.5.0
+VER     := 1.5.1
 DESTDIR ?=
 prefix  ?= /usr/local
 bindir  := $(DESTDIR)$(prefix)/bin

@@ -12,7 +12,7 @@ use std::ptr;
 
 const OPTION_STRING: &[u8] =
     b"M:V1246ab:c:e:fgi:kl:m:no:p:qstvw:xyACD:E:F:GI:MJKL:NO:PQ:R:S:TW:XYB:\0";
-const VER: &str = "1.5.0";
+const VER: &str = "1.5.1";
 const NO_RD_SOCK: c_int = -2;
 const L_SYSLOG: c_int = 0x02;
 const P_EXITERR: c_int = 3;
@@ -164,7 +164,8 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     crate::args::add_arg(ssh_path);
 
     let mut done_fwds: c_int = 0;
-    for i in 1..(argc as usize) {
+    let mut i: usize = 1;
+    while i < argc as usize {
         let arg_ptr = *argv.add(i);
         let b0 = *arg_ptr;
         let b1 = *arg_ptr.add(1);
@@ -173,6 +174,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         if b0 == b'-' as c_char && b1 == b'-' as c_char {
             if sawargstop == 0 {
                 sawargstop = 1;
+                i += 1;
                 continue;
             }
         }
@@ -186,9 +188,9 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
             }
             done_fwds = 1;
         } else if sawargstop == 0 && b0 == b'-' as c_char && b1 == b'M' as c_char {
-            // Skip the -M flag (and its arg if separate).
-            let next_idx = if *arg_ptr.add(2) == 0 { i + 1 } else { i };
-            let _ = next_idx;
+            // -M (or -Mport). If the value is in the next argv element
+            // (b2 == '\0'), advance one extra step so we also skip it.
+            let advance = if *arg_ptr.add(2) == 0 { 2 } else { 1 };
             if wp != 0 && done_fwds == 0 {
                 crate::args::add_arg(c"-L".as_ptr() as *mut c_char);
                 crate::args::add_arg(wmbuf.as_ptr() as *mut c_char);
@@ -198,17 +200,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
                 }
                 done_fwds = 1;
             }
-            // The C original does i++ to also skip the arg of -M.
-            // We can't easily mutate i in a Rust for loop; replicate
-            // by checking arg_ptr[2]==0 below in a different idiom.
-            // For correctness we duplicate the C idiom via continue
-            // with index manipulation: see below.
-            //
-            // Actually, since -M's arg was already consumed by getopt
-            // earlier (which advances optind), it's already past us
-            // in the optind sense. The for-loop here re-walks the
-            // raw argv from the start, so we DO need to skip it
-            // manually. Build a small workaround: track skip-next.
+            i += advance;
             continue;
         }
 
@@ -219,6 +211,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
             OPTION_STRING.as_ptr() as *const c_char,
         );
         crate::args::add_arg(arg_ptr);
+        i += 1;
     }
 
     if runasdaemon != 0 {
