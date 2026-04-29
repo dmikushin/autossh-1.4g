@@ -7,6 +7,9 @@
 /config.status
 autom4te.cache/
 
+# Rust build outputs
+/target/
+
 # tests build artifacts
 /tests/build/
 /tests/unit/test_*

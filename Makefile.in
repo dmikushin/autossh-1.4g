@@ -28,18 +28,26 @@ LIBS=		@LIBS@
 
 TARGET=		autossh
 
-all:		$(TARGET)
+all:		$(TARGET) rust
 
 
 $(TARGET):	$(OFILES)
 		$(CC) $(CPPFLAGS) $(LDFLAGS) -o $(TARGET) $(OFILES) $(LIBS)
 
-check:		$(TARGET)
+# Rust co-build: produces target/release/libautossh.a (linked into
+# unit tests in place of autossh.o as functions are ported) and
+# target/release/autossh-rs (placeholder binary; not installed yet).
+.PHONY: rust
+rust:
+		cargo build --release
+
+check:		$(TARGET) rust
 		$(MAKE) -C tests check
 
 clean:
 		- /bin/rm -f *.o *.a *.core *~
 		- $(MAKE) -C tests clean 2>/dev/null || true
+		- cargo clean 2>/dev/null || true
 
 allclean:	clean
 		- /bin/rm -f $(TARGET)
