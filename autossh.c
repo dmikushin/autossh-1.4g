@@ -116,30 +116,34 @@ const char *rcsid = "$Id: autossh.c,v 1.91 2019/01/05 01:23:39 harding Exp $";
 
 #define	OPTION_STRING "M:V1246ab:c:e:fgi:kl:m:no:p:qstvw:xyACD:E:F:GI:MJKL:NO:PQ:R:S:TW:XYB:"
 
-int	logtype  = L_SYSLOG;	/* default log to syslog */
-int	loglevel = LOG_INFO;	/* default loglevel */
-int	syslog_perror;		/* use PERROR option? */
-FILE	*flog;			/* log file */
+/*
+ * All file-scope globals were moved to src/globals.rs (Phase 6.4).
+ * The C code below references them via these extern declarations.
+ */
+extern int	logtype;
+extern int	loglevel;
+extern int	syslog_perror;
+extern FILE	*flog;
 
-char	*writep;		/* write port as string */
-char	readp[16];		/* read port as string */
-char	*echop;			/* echo port as string */
-char	*mhost = "127.0.0.1";	/* host in port forwards */
-char	*env_port;		/* port spec'd in environment */
-char	*echo_message = "";	/* message to append to echo string */
-char	*pid_file_name;		/* path to pid file */
-int	pid_file_created;	/* we have created pid file */
-time_t	pid_start_time;		/* time autossh process started */
-int	poll_time = POLL_TIME;	/* default connection poll time */
-int	first_poll_time = POLL_TIME; /* initial connection poll time */
-double	gate_time = GATE_TIME;	/* time to "make it out of the gate" */
-int	max_start = MAX_START;  /* how many times to run (default no limit) */
-double 	max_lifetime = MAX_LIFETIME; /* how long can the process/daemon live */
-double	max_session = MAX_SESSION; /* max time per ssh child session */
-int	net_timeout = TIMEO_NET; /* timeout on network data */
-char	*ssh_path = SSH_PATH;	/* default path to ssh */
-int	start_count;		/* # of times exec()d ssh */
-time_t	start_time;		/* time we exec()d ssh */
+extern char	*writep;
+extern char	readp[16];
+extern char	*echop;
+extern char	*mhost;
+extern char	*env_port;
+extern char	*echo_message;
+extern char	*pid_file_name;
+extern int	pid_file_created;
+extern time_t	pid_start_time;
+extern int	poll_time;
+extern int	first_poll_time;
+extern double	gate_time;
+extern int	max_start;
+extern double 	max_lifetime;
+extern double	max_session;
+extern int	net_timeout;
+extern char	*ssh_path;
+extern int	start_count;
+extern time_t	start_time;
 
 #if defined(__CYGWIN__)
 int	ntservice;		/* set some stuff for running as nt service */
@@ -151,15 +155,15 @@ extern char  **newav;
 extern void	add_arg(char *s);
 #define START_AV_SZ	16
 
-int	cchild;			/* current child */
-int	ssh_stderr_fd = -1;	/* read end of SSH stderr pipe */
-time_t	pipe_lost_time;		/* when stderr pipe was lost (0 = pipe alive) */
-time_t	last_stderr_time;	/* last time we read data from SSH stderr */
-volatile sig_atomic_t	port_fwd_failed; /* SSH reported port forwarding failure */
+extern int	cchild;
+extern int	ssh_stderr_fd;
+extern time_t	pipe_lost_time;
+extern time_t	last_stderr_time;
+extern volatile sig_atomic_t	port_fwd_failed;
 
-volatile sig_atomic_t   exit_signalled;  /* signalled outside of monitor loop */
-volatile sig_atomic_t	restart_ssh;	/* signalled to restart ssh child */
-volatile sig_atomic_t	dolongjmp;
+extern volatile sig_atomic_t   exit_signalled;
+extern volatile sig_atomic_t	restart_ssh;
+extern volatile sig_atomic_t	dolongjmp;
 sigjmp_buf jumpbuf;
 
 void	usage(int code) __attribute__ ((__noreturn__));

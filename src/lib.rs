@@ -15,6 +15,7 @@
 
 pub mod args;
 pub mod env;
+pub mod globals;
 pub mod grace;
 pub mod kill;
 pub mod lifetime;
