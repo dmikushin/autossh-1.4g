@@ -35,6 +35,13 @@ UNIT_BINS := $(patsubst $(TOPDIR)/tests/unit/%.c,$(TOPDIR)/tests/unit/%,$(UNIT_S
 AUTOSSH_TEST_OBJ := $(TOPDIR)/tests/build/autossh-test.o
 MOCKS_OBJ        := $(TOPDIR)/tests/build/mocks.o
 
+# Rust staticlib hosting ported functions. As the C-to-Rust port
+# advances, more symbols come from this archive; the link order
+# (object first, then archive) lets archive members satisfy
+# undefined references from autossh-test.o.
+RUST_STATICLIB   := $(TOPDIR)/target/release/libautossh.a
+RUST_LIBS        := -lpthread -ldl -lm
+
 .PHONY: all check clean
 
 all: $(UNIT_BINS)
@@ -51,8 +58,13 @@ $(TOPDIR)/tests/build:
 	mkdir -p $@
 
 # Link rule for each test binary
-$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(WRAP_FLAGS) -o $@ $^ $(LIBS)
+$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ) $(RUST_STATICLIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(WRAP_FLAGS) -o $@ \
+		$(TOPDIR)/tests/unit/$*.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ) \
+		$(RUST_STATICLIB) $(LIBS) $(RUST_LIBS)
+
+$(RUST_STATICLIB):
+	cd $(TOPDIR) && cargo build --release
 
 check: $(UNIT_BINS)
 	@# UNIT_BINS expands word-split into the for-loop. Make itself

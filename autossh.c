@@ -145,8 +145,10 @@ time_t	start_time;		/* time we exec()d ssh */
 int	ntservice;		/* set some stuff for running as nt service */
 #endif
 
-int	newac;			/* argc, argv for ssh */
-char	**newav;
+/* newac, newav and add_arg() — moved to src/args.rs (Phase 1 port) */
+extern int	newac;
+extern char  **newav;
+extern void	add_arg(char *s);
 #define START_AV_SZ	16
 
 int	cchild;			/* current child */
@@ -528,38 +530,8 @@ main(int argc, char **argv)
 #endif /* UNIT_TEST_NO_MAIN */
 
 /*
- * Add an argument to the argument array.
+ * add_arg() — moved to src/args.rs (Phase 1 port).
  */
-void
-add_arg(char *s) 
-{
-	char	*p;
-	size_t	len;
-	static	size_t newamax = START_AV_SZ;
-
-	len = strlen(s);
-	if (len == 0)
-		return;
-
-	if (!newav) {
-		newav = calloc(START_AV_SZ, sizeof(char *));
-		if (!newav)
-			xerrlog(LOG_ERR, "malloc: %s", strerror(errno));
-	} else if (newac >= newamax-1) {
-		newamax *= 2;
-		newav = realloc(newav, newamax * sizeof(char *));
-		if (!newav)
-			xerrlog(LOG_ERR, "realloc: %s", strerror(errno));
-	}
-	p = malloc(len+1);		
-	if (!p) xerrlog(LOG_ERR, "malloc: %s", strerror(errno));
-	memmove(p, s, len);
-	p[len] = '\0';
-	newav[newac++] = p;
-	newav[newac] = NULL;
-	
-	return;
-}
 
 /*
  * strip an argument option from an option string; strings that

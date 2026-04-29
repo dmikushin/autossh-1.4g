@@ -5,9 +5,12 @@
 //! same name as the legacy autossh.c symbol. Tests link against
 //! libautossh.a in place of autossh.o.
 //!
-//! During the porting effort the crate is empty; the legacy
-//! autossh.c compilation unit still provides every symbol. As each
-//! function is moved to Rust the corresponding C definition is
-//! deleted and a `#[no_mangle] pub extern "C"` definition lands here.
-//! The unit test suite (linked via -Wl,--wrap=<libc syscalls>)
+//! As each function is moved to Rust the corresponding C definition
+//! is deleted and a `#[no_mangle] pub extern "C"` definition lands
+//! here. The unit test suite (linked via -Wl,--wrap=<libc syscalls>)
 //! validates each step.
+
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+
+pub mod args;

@@ -22,6 +22,16 @@ CPPFLAGS=	@CPPFLAGS@
 
 OFILES=		autossh.o
 
+# Rust staticlib produced by `cargo build --release`. Progressively
+# replaces autossh.o symbols as functions are ported. Linking it in
+# unconditionally lets us delete a function from autossh.c and add
+# the same symbol via #[no_mangle] in src/ in a single commit.
+RUST_STATICLIB= target/release/libautossh.a
+
+# Linux Rust staticlibs need pthread + dl + m at link time even if the
+# crate doesn't appear to use them — Rust's std runtime references them.
+RUST_LIBS=	-lpthread -ldl -lm
+
 LD=		@LD@
 LDFLAGS=	@LDFLAGS@
 LIBS=		@LIBS@
@@ -31,8 +41,9 @@ TARGET=		autossh
 all:		$(TARGET) rust
 
 
-$(TARGET):	$(OFILES)
-		$(CC) $(CPPFLAGS) $(LDFLAGS) -o $(TARGET) $(OFILES) $(LIBS)
+$(TARGET):	$(OFILES) rust
+		$(CC) $(CPPFLAGS) $(LDFLAGS) -o $(TARGET) $(OFILES) \
+			$(RUST_STATICLIB) $(LIBS) $(RUST_LIBS)
 
 # Rust co-build: produces target/release/libautossh.a (linked into
 # unit tests in place of autossh.o as functions are ported) and
