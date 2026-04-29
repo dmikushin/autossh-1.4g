@@ -14,6 +14,7 @@
 #![allow(non_camel_case_types)]
 
 pub mod args;
+pub mod conn;
 pub mod env;
 pub mod globals;
 pub mod grace;
