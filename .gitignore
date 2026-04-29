@@ -1,20 +1,16 @@
-# build outputs
-/Makefile
+# Build outputs
 /autossh
-/autossh.o
-/config.h
-/config.log
-/config.status
-autom4te.cache/
 
-# Rust build outputs
+# Rust
 /target/
 
-# tests build artifacts
+# Test artifacts
 /tests/build/
 /tests/unit/test_*
 !/tests/unit/test_*.c
 *.gcda
 *.gcno
 *.gcov
+
+# AI orchestration scratch
 .agentura/
