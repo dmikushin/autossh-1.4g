@@ -138,6 +138,90 @@ test_port_fwd_fail() {
     assert_log_contains "max start count reached" || return 1
 }
 
+# Argv-builder correctness: verifies that the argv autossh hands
+# to ssh actually matches the user's flags, with no spurious values
+# introduced by misparsing -M / option-arg pairs.
+#
+# Regression for v1.5.1: the -M-with-separate-arg form ("-M" "0")
+# used to leak the "0" into ssh's argv, where ssh interpreted it
+# as a hostname (resolving to 0.0.0.0). The mock_ssh.sh wrapper
+# logs its argv to MOCK_LOG; we grep that.
+test_argv_to_ssh_is_correct() {
+    export MOCK_SSH_MODE=exit-fast-0
+    export AUTOSSH_GATETIME=0
+    export AUTOSSH_MAXSTART=1
+    # Realistic command line: -M 0 (separate value), several -o,
+    # short flags, multiple forwards, and the host-with-trailing-
+    # options form that triggered the original bug.
+    run_autossh_async \
+        -M 0 \
+        -o "ServerAliveInterval=30" \
+        -N -t \
+        -R 22322:localhost:22 \
+        -L 3180:localhost:3180 \
+        -D 8080 \
+        user@host -i /tmp/dummy_key -p 2221
+
+    wait_autossh_with_timeout 5
+    rc=$?
+    if [ $rc -eq 124 ]; then
+        echo "  did not exit"
+        return 1
+    fi
+
+    if [ ! -s "$MOCK_LOG" ]; then
+        echo "  mock ssh was never invoked"
+        return 1
+    fi
+
+    # The "[PID] " prefix from mock_ssh.sh is followed by the argv
+    # mock_ssh saw, space-separated. Strip the prefix and inspect.
+    argv=$(sed 's/^\[[0-9]*\] //' "$MOCK_LOG")
+
+    # Bug regression check: a bare "0" must not appear as a token.
+    # (It would, before the fix, sit right after where -M was
+    # supposed to be consumed.)
+    case " $argv " in
+        *" 0 "*)
+            echo "  FAIL: spurious '0' token in ssh argv (autossh -M argv-skip regression)"
+            echo "  argv: $argv"
+            return 1
+            ;;
+    esac
+
+    # Sanity: the host the user requested must be there.
+    case " $argv " in
+        *" user@host "*)
+            ;;
+        *)
+            echo "  FAIL: hostname 'user@host' missing from ssh argv"
+            echo "  argv: $argv"
+            return 1
+            ;;
+    esac
+
+    # The forward flags the user asked for must all be present.
+    for needle in '-N' '-t' '-R 22322:localhost:22' '-L 3180:localhost:3180' '-D 8080' '-i /tmp/dummy_key' '-p 2221'; do
+        case " $argv " in
+            *" $needle "*) ;;
+            *)
+                echo "  FAIL: '$needle' missing from ssh argv"
+                echo "  argv: $argv"
+                return 1
+                ;;
+        esac
+    done
+
+    # The literal -M flag must NOT propagate (autossh consumed it).
+    case " $argv " in
+        *" -M "* | *" -M0 "*)
+            echo "  FAIL: -M leaked through to ssh"
+            echo "  argv: $argv"
+            return 1
+            ;;
+    esac
+}
+
 # Note on restart logic: the basic "ssh exits 255 → restart" loop is
 # exercised by test_watchdog_silence (which restarts due to silence)
 # and test_port_fwd_fail (which restarts due to detected error). A
@@ -182,6 +266,7 @@ for t in test_watchdog_silence \
          test_sigterm_immune_child \
          test_double_sigint_force_exit \
          test_port_fwd_fail \
+         test_argv_to_ssh_is_correct \
          test_max_lifetime; do
     if run_it_test "$t" "$t"; then
         pass=$((pass + 1))
