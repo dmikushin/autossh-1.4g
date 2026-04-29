@@ -18,6 +18,7 @@ pub mod env;
 pub mod grace;
 pub mod kill;
 pub mod lifetime;
+pub mod run;
 pub mod signals;
 pub mod stderr_drain;
 pub mod wait;
