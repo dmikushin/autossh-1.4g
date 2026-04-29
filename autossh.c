@@ -197,94 +197,9 @@ void    sig_catch(int sig);
 int	exceeded_lifetime(void);
 unsigned int	clear_alarm_timer(void);
 
-void
-usage(int code)
-{
-	fprintf(code ? stderr : stdout,
-	    "usage: %s [-V] [-M monitor_port[:echo_port]] [-f] [SSH_OPTIONS]\n", 
-	    __progname);
-	if (code) {
-		fprintf(stderr, "\n");
-		fprintf(stderr, 
-		    "    -M specifies monitor port. May be overridden by"
-		    " environment\n"
-		    "       variable AUTOSSH_PORT. 0 turns monitoring"
-		    " loop off.\n"
-		    "       Alternatively, a port for an echo service on"
-		    " the remote\n"
-		    "       machine may be specified. (Normally port 7.)\n");
-		fprintf(stderr, 
-		    "    -f run in background (autossh handles this, and"
-		    " does not\n"
-		    "       pass it to ssh.)\n");
-		fprintf(stderr, 
-		    "    -V print autossh version and exit.\n");
-		fprintf(stderr, "\n");
-		fprintf(stderr, "Environment variables are:\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_GATETIME    "
-		    "- how long must an ssh session be established\n"
-		    "                        "
-		    "  before we decide it really was established\n"
-		    "                        "
-		    "  (in seconds). Default is %d seconds; use of -f\n"
-		    "                        "
-		    "  flag sets this to 0.\n", GATE_TIME);
-		fprintf(stderr, 
-		    "    AUTOSSH_LOGFILE     "
-		    "- file to log to (default is to use the syslog\n"
-		    "                        "
-		    "  facility)\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_LOGLEVEL    "
-		    "- level of log verbosity\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_MAXLIFETIME "
-		    "- set the maximum time to live (seconds)\n");
-		fprintf(stderr,
-		    "    AUTOSSH_MAXSTART    "
-		    "- max times to restart (default is no limit)\n");
-		fprintf(stderr,
-		    "    AUTOSSH_MAX_SESSION "
-		    "- max seconds SSH may be silent on stderr (or stuck\n"
-		    "                        "
-		    "  after stderr pipe loss) before being considered\n"
-		    "                        "
-		    "  stuck and killed. 0 = no watchdog (default).\n"
-		    "                        "
-		    "  Recommended with -M 0.\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_MESSAGE     "
-		    "- message to append to echo string (max 64 bytes)\n");
-#if defined(__CYGWIN__)
-		fprintf(stderr, 
-		    "    AUTOSSH_NTSERVICE   "
-		    "- tweak some things for running under cygrunsrv\n");
-#endif
-		fprintf(stderr, 
-		    "    AUTOSSH_PATH        "
-		    "- path to ssh if not default\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_PIDFILE     "
-		    "- write pid to this file\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_POLL        "
-		    "- how often to check the connection (seconds)\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_FIRST_POLL  "
-		    "- time before first connection check (seconds)\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_PORT        "
-		    "- port to use for monitor connection\n");
-		fprintf(stderr, 
-		    "    AUTOSSH_DEBUG       "
-		    "- turn logging to maximum verbosity and log to\n"
-		    "                        "
-		    "  stderr\n");
-		fprintf(stderr, "\n");
-	}
-	exit(code);
-}
+/*
+ * usage / unlink_pid_file / timestr — moved to src/util.rs (Phase 6 port).
+ */
 
 #ifndef UNIT_TEST_NO_MAIN
 int
@@ -1053,36 +968,6 @@ conn_listen(char *host,  char *port)
 }
 #endif /* ! HAVE_ADDRINFO */
 
-/*
- * On OpenBSD _exit() calls atexit() registered functions.
- * Solaris has a function, _exithandle(), you can call
- * before _exit().
- */
-void
-unlink_pid_file(void)
-{
-	if (pid_file_created)
-		(void)unlink(pid_file_name);
-	pid_file_created = 0;
-}
-
-/*
- * Nicely formatted time string for logging
- */
-char *
-timestr(void)
-{
-	static	char timestr[32];
-	time_t  now;
-	struct	tm *tm;
-
-	(void)time(&now);
-	tm = localtime(&now);
-	(void)strftime(timestr, sizeof(timestr), 
-	    "%Y/%m/%d %H:%M:%S", tm);
-
-	return timestr;
-}
 
 /*
  * Log errors.

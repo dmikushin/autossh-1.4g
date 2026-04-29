@@ -21,5 +21,6 @@ pub mod lifetime;
 pub mod run;
 pub mod signals;
 pub mod stderr_drain;
+pub mod util;
 pub mod wait;
 pub mod watch;
