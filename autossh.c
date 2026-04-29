@@ -675,79 +675,10 @@ ssh_run(int sock, char **av)
  * grace_time() — moved to src/grace.rs (Phase 4 port).
  */
 
-void
-set_exit_sig_handler()
-{
-	struct	sigaction act;
-
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sig_catch;
-	sigemptyset(&act.sa_mask);
-	act.sa_flags = 0;
-
-	sigaction(SIGTERM, &act, NULL);
-	sigaction(SIGINT,  &act, NULL);
-}
-
-void
-set_sig_handlers(void)
-{
-	struct		sigaction act;
-	sigset_t	blockmask;
-
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sig_catch;
-	act.sa_flags = 0;
-
-	/* create mask to ensure sig_catch() processes one signal at-a-time */
-	sigemptyset(&blockmask);
-	sigaddset(&blockmask, SIGTERM);
-	sigaddset(&blockmask, SIGINT);
-	sigaddset(&blockmask, SIGHUP);
-	sigaddset(&blockmask, SIGUSR1);
-	sigaddset(&blockmask, SIGUSR2);
-	sigaddset(&blockmask, SIGCHLD);
-	sigaddset(&blockmask, SIGALRM);
-	sigaddset(&blockmask, SIGPIPE);
-	act.sa_mask = blockmask;
-
-	sigaction(SIGTERM, &act, NULL);
-	sigaction(SIGINT,  &act, NULL);
-	sigaction(SIGHUP,  &act, NULL);
-	sigaction(SIGUSR1, &act, NULL);
-	sigaction(SIGUSR2, &act, NULL);
-	sigaction(SIGCHLD, &act, NULL);
-
-	act.sa_flags |= SA_RESTART;
-	sigaction(SIGALRM, &act, NULL);
-
-	act.sa_handler = SIG_IGN;
-	act.sa_flags = 0;
-	sigaction(SIGPIPE, &act, NULL);
-}
-
-void
-unset_sig_handlers(void)
-{
-	struct	sigaction act;
-
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = SIG_DFL;
-	sigemptyset(&act.sa_mask);
-	act.sa_flags = 0;
-	
-	/* We don't reset SIGTERM, as we want the
-	   handler to persist in the run_ssh() loop */
-	/* This seems a little hidden down in here... */
-	/* sigaction(SIGTERM, &act, NULL); */
-	/* sigaction(SIGINT,  &act, NULL); */
-	sigaction(SIGHUP,  &act, NULL);
-	sigaction(SIGUSR1, &act, NULL);
-	sigaction(SIGUSR2, &act, NULL);
-	sigaction(SIGCHLD, &act, NULL);
-	sigaction(SIGALRM, &act, NULL);
-	sigaction(SIGPIPE, &act, NULL);
-}
+/*
+ * set_exit_sig_handler / set_sig_handlers / unset_sig_handlers
+ * — moved to src/signals.rs (Phase 6 port).
+ */
 
 /*
  * sig_catch() — moved to src/signals.rs (Phase 3 port).

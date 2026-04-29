@@ -64,3 +64,73 @@ pub unsafe extern "C" fn sig_catch(sig: c_int) {
         siglongjmp(&raw mut jumpbuf, sig);
     }
 }
+
+/// Install sig_catch on SIGTERM/SIGINT only, with empty sa_mask.
+/// Called once at the start of ssh_run; survives across iterations
+/// thanks to unset_sig_handlers leaving SIGTERM/SIGINT alone.
+#[no_mangle]
+pub unsafe extern "C" fn set_exit_sig_handler() {
+    let mut act: libc::sigaction = std::mem::zeroed();
+    act.sa_sigaction = sig_catch as *const () as usize;
+    libc::sigemptyset(&mut act.sa_mask);
+    act.sa_flags = 0;
+
+    libc::sigaction(libc::SIGTERM, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGINT, &act, std::ptr::null_mut());
+}
+
+/// Install sig_catch on the full set of signals tracked during the
+/// ssh_watch loop. The mask blocks every other signal sig_catch
+/// listens for, so handler invocation is serialized.
+#[no_mangle]
+pub unsafe extern "C" fn set_sig_handlers() {
+    let mut act: libc::sigaction = std::mem::zeroed();
+    act.sa_sigaction = sig_catch as *const () as usize;
+    act.sa_flags = 0;
+
+    libc::sigemptyset(&mut act.sa_mask);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGTERM);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGINT);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGHUP);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGUSR1);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGUSR2);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGCHLD);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGALRM);
+    libc::sigaddset(&mut act.sa_mask, libc::SIGPIPE);
+
+    libc::sigaction(libc::SIGTERM, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGINT, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGHUP, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGUSR1, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGUSR2, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGCHLD, &act, std::ptr::null_mut());
+
+    // SIGALRM uses SA_RESTART so blocking syscalls retry rather
+    // than returning EINTR (the longjmp via sig_catch unwinds them).
+    act.sa_flags |= libc::SA_RESTART;
+    libc::sigaction(libc::SIGALRM, &act, std::ptr::null_mut());
+
+    // SIGPIPE: ignore (a broken pipe shouldn't kill autossh).
+    act.sa_sigaction = libc::SIG_IGN;
+    act.sa_flags = 0;
+    libc::sigaction(libc::SIGPIPE, &act, std::ptr::null_mut());
+}
+
+/// Restore default disposition for the signals set_sig_handlers
+/// installed, EXCEPT SIGTERM/SIGINT — those persist across
+/// iterations of the ssh_run loop so a Ctrl+C between forks still
+/// works.
+#[no_mangle]
+pub unsafe extern "C" fn unset_sig_handlers() {
+    let mut act: libc::sigaction = std::mem::zeroed();
+    act.sa_sigaction = libc::SIG_DFL;
+    libc::sigemptyset(&mut act.sa_mask);
+    act.sa_flags = 0;
+
+    libc::sigaction(libc::SIGHUP, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGUSR1, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGUSR2, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGCHLD, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGALRM, &act, std::ptr::null_mut());
+    libc::sigaction(libc::SIGPIPE, &act, std::ptr::null_mut());
+}
