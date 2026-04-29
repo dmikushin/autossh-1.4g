@@ -3,7 +3,6 @@ name = "autossh"
 version = "1.4.0"
 edition = "2021"
 rust-version = "1.70"
-build = "build.rs"
 
 [lib]
 name = "autossh"
@@ -20,6 +19,3 @@ debug = true
 
 [dependencies]
 libc = "0.2"
-
-[build-dependencies]
-cc = "1"

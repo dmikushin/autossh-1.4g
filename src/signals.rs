@@ -22,20 +22,30 @@
 
 use libc::c_int;
 
-/// Opaque handle to C's `sigjmp_buf jumpbuf;`. The libc crate doesn't
-/// expose `sigjmp_buf` (which on glibc is a typedef for a struct
-/// array), so we use the canonical C-FFI pattern of an extern type
-/// referenced only by pointer. Storage is owned by autossh.c.
-#[repr(C)]
+/// Storage for `sigjmp_buf jumpbuf` referenced by sig_catch.
+///
+/// libc 0.2 doesn't expose `sigjmp_buf`. Glibc x86_64 sigjmp_buf is
+/// ~200 bytes (jmp_buf 144 + mask_was_saved + sigset_t 128). Other
+/// glibc targets reach ~570 bytes (aarch64). 1024 bytes aligned to
+/// 16 is generous on every platform we care about and matches the
+/// alignment requirement of the underlying struct __jmp_buf_tag.
+///
+/// The instance is zero-initialised; sigsetjmp populates it on first
+/// call. Since signals are blocked around the sigsetjmp/longjmp
+/// sequences in ssh_watch, no external code observes the storage
+/// before it's been written, so zero-init is harmless.
+#[repr(C, align(16))]
 pub struct JmpBuf {
-    _private: [u8; 0],
+    _data: [u8; 1024],
 }
+
+#[no_mangle]
+pub static mut jumpbuf: JmpBuf = JmpBuf { _data: [0; 1024] };
 
 extern "C" {
     static mut exit_signalled: c_int; // volatile sig_atomic_t in C
     static mut restart_ssh: c_int;
     static mut dolongjmp: c_int;
-    static mut jumpbuf: JmpBuf;
 
     fn siglongjmp(env: *mut JmpBuf, val: c_int) -> !;
 }

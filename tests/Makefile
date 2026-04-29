@@ -3,10 +3,8 @@
 # Each test binary links:
 #   - the test source (tests/unit/test_*.c)
 #   - the mocks library (tests/mocks/mocks.c, with -Wl,--wrap=<libc syscalls>)
-#   - the autossh staticlib (target/release/libautossh.a, the entire Rust
-#     port; produced by cargo)
-#   - a fresh copy of c-shim/errlog.c compiled here for test isolation,
-#     supplying the C-side errlog/xerrlog/doerrlog and jumpbuf storage
+#   - the autossh staticlib (target/release/libautossh.a — the entire
+#     Rust port, produced by cargo). It carries the jumpbuf storage too.
 #
 # Run from the project root:  make -C tests check
 
@@ -27,7 +25,6 @@ LIBS    := -lnsl
 UNIT_SRCS := $(wildcard $(TOPDIR)/tests/unit/test_*.c)
 UNIT_BINS := $(patsubst $(TOPDIR)/tests/unit/%.c,$(TOPDIR)/tests/unit/%,$(UNIT_SRCS))
 
-CSHIM_OBJ      := $(TOPDIR)/tests/build/cshim.o
 MOCKS_OBJ      := $(TOPDIR)/tests/build/mocks.o
 RUST_STATICLIB := $(TOPDIR)/target/release/libautossh.a
 RUST_LIBS      := -lpthread -ldl -lm
@@ -36,18 +33,15 @@ RUST_LIBS      := -lpthread -ldl -lm
 
 all: $(UNIT_BINS)
 
-$(CSHIM_OBJ): $(TOPDIR)/c-shim/jumpbuf.c | $(TOPDIR)/tests/build
-	$(CC) $(CFLAGS) -c -o $@ $<
-
 $(MOCKS_OBJ): $(TOPDIR)/tests/mocks/mocks.c $(TOPDIR)/tests/mocks/mocks.h | $(TOPDIR)/tests/build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(TOPDIR)/tests/build:
 	mkdir -p $@
 
-$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(CSHIM_OBJ) $(MOCKS_OBJ) $(RUST_STATICLIB)
+$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(MOCKS_OBJ) $(RUST_STATICLIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(WRAP_FLAGS) -o $@ \
-		$(TOPDIR)/tests/unit/$*.c $(CSHIM_OBJ) $(MOCKS_OBJ) \
+		$(TOPDIR)/tests/unit/$*.c $(MOCKS_OBJ) \
 		$(RUST_STATICLIB) $(LIBS) $(RUST_LIBS)
 
 $(RUST_STATICLIB):
