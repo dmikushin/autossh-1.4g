@@ -1295,31 +1295,10 @@ unset_sig_handlers(void)
 }
 
 /*
- * If we're primed, longjump back.
- *
- * If a termination signal (SIGINT/SIGTERM) arrives a second time
- * while exit is already in progress, the user is impatient — bail
- * out hard with _exit() rather than letting the orderly shutdown
- * (which may itself be stuck in waitpid/sleep loops) drag on.
+ * sig_catch() — moved to src/signals.rs (Phase 3 port).
+ * Globals it touches (exit_signalled, restart_ssh, dolongjmp, jumpbuf)
+ * still live below; Rust accesses them via extern static mut.
  */
-void
-sig_catch(int sig)
-{
-	if (sig == SIGUSR1)
-		restart_ssh = 1;
-	else if (sig == SIGTERM || sig == SIGINT) {
-		if (exit_signalled) {
-			/* second termination signal — force exit */
-			_exit(1);
-		}
-		exit_signalled = 1;
-	}
-	if (dolongjmp) {
-		dolongjmp = 0;
-		siglongjmp(jumpbuf, sig);
-	}
-	return;
-}
 
 /*
  * Test the connection monitor loop can pass traffic, and that
