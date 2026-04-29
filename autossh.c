@@ -534,43 +534,8 @@ main(int argc, char **argv)
  */
 
 /*
- * strip an argument option from an option string; strings that
- * end up with just a '-' become zero length (add_arg() will
- * skip them). An option that enters as '-' is untouched.
- *
+ * strip_arg() — moved to src/args.rs (Phase 1 port).
  */
-void
-strip_arg(char *arg, char ch, char *opts)
-{
-	char *f, *o;
-	size_t len;
-	
-
-	if (arg[0] == '-' && arg[1] != '\0') {
-		for (len = strlen(arg), f = arg; *f != '\0'; f++, len--) {
-			/* 
-			 * If f in option string and next char is ':' then
-			 * what follows is a parameter to the flag, and
-			 * what we're stripping may be valid in it. We do 
-			 * not validate f in opts: that is really someone 
-			 * else's job, and the options may change. In that
-			 * case, this provides a best effort. This is 
-			 * terribly inefficient.
-			 */
-			if ((o = strchr(opts, *f)) != NULL) {
-				if (*(o+1) == ':')
-					return; 
-			}
-			if (*f == ch)
-				(void)memmove(f, f+1, len); 
-		}
-		/* left with "-" alone? then truncate */
-		if (arg[1] == '\0')
-			arg[0] = '\0';
-	}
-
-	return;
-}
 
 /* 
  * Ugly, but as we've used so many command args...

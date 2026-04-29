@@ -94,3 +94,53 @@ pub unsafe extern "C" fn add_arg(s: *const c_char) {
     newac += 1;
     *newav.add(newac as usize) = ptr::null_mut();
 }
+
+/// `strip_arg(arg, ch, opts)`: strip every occurrence of `ch` from
+/// the short-option argument `arg` (e.g. removes 'f' from "-fN" →
+/// "-N"). If `arg` does not start with '-' or is just "-", it is
+/// left untouched. If `*f` matches a flag in `opts` whose entry
+/// in the option string is followed by ':' (i.e. takes a parameter),
+/// the rest of `arg` is the parameter value and we stop scanning.
+///
+/// This is a literal port of the C version, including the in-place
+/// `memmove(f, f+1, len)` slide that may read one byte past the
+/// end of `arg` on the final iteration. Static-string tests pass
+/// because the byte past the NUL terminator is zero in practice;
+/// preserving the exact behaviour avoids changing observable
+/// output for adversarial inputs.
+///
+/// # Safety
+/// `arg` and `opts` must be NUL-terminated C strings; `arg` must be
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn strip_arg(arg: *mut c_char, ch: c_char, opts: *const c_char) {
+    if arg.is_null() || opts.is_null() {
+        return;
+    }
+    if *arg != b'-' as c_char || *arg.add(1) == 0 {
+        return;
+    }
+
+    let mut len = libc::strlen(arg);
+    let mut f = arg;
+    while *f != 0 {
+        let o = libc::strchr(opts, *f as c_int);
+        if !o.is_null() && *o.add(1) == b':' as c_char {
+            // *f is a flag taking a parameter; rest of arg is the
+            // parameter value. Stop scanning.
+            return;
+        }
+        if *f == ch {
+            // shift everything after f one byte left
+            libc::memmove(f as *mut _, f.add(1) as *const _, len);
+        }
+        f = f.add(1);
+        if len > 0 {
+            len -= 1;
+        }
+    }
+
+    if *arg.add(1) == 0 {
+        *arg = 0;
+    }
+}
