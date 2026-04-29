@@ -1040,70 +1040,8 @@ ssh_wait(int options) {
  */
 
 /*
- * Try to prevent rapid-fire restarts on such things
- * as connection refused. Back off and try more slowly.
- * Calculate a grace period to wait based time between
- * now and the last restart and the number of tries
- * in a row that have had less than the poll_time
- * between them. 
- *
- * Questions:
- *	- should it back off faster? slower?
+ * grace_time() — moved to src/grace.rs (Phase 4 port).
  */
-void
-grace_time(time_t last_start)
-{
-	int	n;
-	double	t;
-	int	interval;
-	time_t	now;
-	static	int tries;
-
-	double	min_time;
-
-	/* 
-	 * Minimum time we have to stay up to avoid backoff
-	 * behaviour. With default poll_time this is 60 secs.
-	 * This may be too complicated.
-	 */
-	min_time = (double)(poll_time / 10);
-	if (min_time < 10) min_time = 10;
-
-	time(&now);
-	if (difftime(now, last_start) >= min_time)
-		tries = 0;
-	else
-		tries++;
-
-	errlog(LOG_DEBUG,
-	    "checking for grace period, tries = %d", tries);
-
-	if (tries > N_FAST_TRIES) {
-		t = (double)(tries - N_FAST_TRIES);
-		n = (int)((poll_time / 100.0) * (t * (t/3)));
-		interval = (n > poll_time) ? poll_time : n;
-		if (interval) {
-			errlog(LOG_DEBUG,
-			    "sleeping for grace time %d secs", interval);
-			sleep(interval);
-		}
-	}
-
-	/*
-	 * If the last SSH reported port forwarding failure,
-	 * enforce a minimum delay so the remote port has time
-	 * to be released before we attempt to bind it again.
-	 */
-	if (port_fwd_failed) {
-		errlog(LOG_INFO,
-		    "port forwarding failed on previous attempt, "
-		    "enforcing minimum %d second delay",
-		    PORT_FWD_FAIL_DELAY);
-		sleep(PORT_FWD_FAIL_DELAY);
-		port_fwd_failed = 0;
-	}
-	return;
-}
 
 void
 set_exit_sig_handler()
