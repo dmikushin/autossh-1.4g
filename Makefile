@@ -3,7 +3,7 @@
 # wrappers for users with the autoconf habit (`./configure && make
 # install`).
 
-VER     := 1.5.2
+VER     := 1.5.3
 DESTDIR ?=
 prefix  ?= /usr/local
 bindir  := $(DESTDIR)$(prefix)/bin
@@ -21,8 +21,14 @@ all: $(TARGET)
 $(TARGET): $(CARGOBIN)
 	cp $(CARGOBIN) $(TARGET)
 
-$(CARGOBIN): FORCE
+$(CARGOBIN): SHIM
 	cargo build --release
+
+# The autossh main crate include_bytes!()'s the LD_PRELOAD shim,
+# so the .so must exist at compile time. Build it first.
+.PHONY: SHIM
+SHIM:
+	cargo build --release -p ssh-stuck-detector
 
 .PHONY: FORCE
 FORCE:

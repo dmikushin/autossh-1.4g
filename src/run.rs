@@ -53,6 +53,10 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
 
     crate::signals::set_exit_sig_handler();
 
+    // Stage the LD_PRELOAD watchdog (extract once, install in env
+    // so the SSH child inherits it on execvp).
+    crate::stuck_detector::install_for_child();
+
     while max_start < 0 || start_count < max_start {
         if crate::lifetime::exceeded_lifetime() != 0 {
             return P_EXITOK;

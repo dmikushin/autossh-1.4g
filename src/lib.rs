@@ -26,6 +26,7 @@ pub mod main_logic;
 pub mod run;
 pub mod signals;
 pub mod stderr_drain;
+pub mod stuck_detector;
 pub mod util;
 pub mod wait;
 pub mod watch;

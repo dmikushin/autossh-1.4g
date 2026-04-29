@@ -54,13 +54,24 @@ pub unsafe extern "C" fn check_ssh_stderr() -> c_int {
         let _ = libc::write(libc::STDERR_FILENO, buf.as_ptr() as *const c_void,
                             n as size_t);
 
-        // Look for the known-fatal pattern.
+        // Look for known-fatal patterns.
         let needle = c"remote port forwarding failed".as_ptr();
         let found = libc::strstr(buf.as_ptr() as *const c_char, needle);
         if !found.is_null() {
             errlog!(libc::LOG_ERR,
                 "detected SSH error: remote port forwarding failed; will kill and restart ssh");
             port_fwd_failed = 1;
+            return 1;
+        }
+
+        // The LD_PRELOAD stuck-detector wrote a "STUCK in <syscall>"
+        // line — ssh is hung in a network call (proxy/DNS/recv).
+        // Kill + restart.
+        let stuck = c"ssh-stuck-detector: STUCK".as_ptr();
+        let found = libc::strstr(buf.as_ptr() as *const c_char, stuck);
+        if !found.is_null() {
+            errlog!(libc::LOG_ERR,
+                "stuck-detector flagged ssh hung in a network syscall; will kill and restart ssh");
             return 1;
         }
     }

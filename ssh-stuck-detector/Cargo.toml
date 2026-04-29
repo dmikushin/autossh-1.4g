@@ -1,0 +1,11 @@
+[package]
+name = "ssh-stuck-detector"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ssh_stuck_detector"
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2"
