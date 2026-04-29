@@ -1,65 +1,39 @@
 # Known issues
 
-## SIGCHLD race in `ssh_watch()` between `ssh_wait(WNOHANG)` and `dolongjmp=1`
+(no open issues — both items in this file have been resolved.
+Kept as a historical record.)
 
-**Severity**: Medium. Manifests in tests; rarely hits in production with
-real `ssh` because real ssh does not exit instantaneously after fork.
+## SIGCHLD race in `ssh_watch()` between `ssh_wait(WNOHANG)` and `dolongjmp=1` — RESOLVED
 
-**Location**: `autossh.c:898-948` (the body of the `for(;;)` loop in
-`ssh_watch`, specifically the window between the call to
-`ssh_wait(WNOHANG)` and the assignment `dolongjmp = 1`).
+**Original symptom**: if the SSH child exited in the brief window
+between `ssh_wait(WNOHANG)` returning P_CONTINUE and the parent
+setting `dolongjmp = 1`, the kernel-delivered SIGCHLD ran sig_catch
+with `dolongjmp == 0`, the handler returned without `siglongjmp`,
+and the signal was "consumed". Subsequently `poll()` would block
+until the next SIGALRM (default `poll_time = 600` → 10 minutes per
+silent restart).
 
-**Symptom**: If the SSH child exits in this brief window, the kernel
-delivers SIGCHLD, `sig_catch()` runs with `dolongjmp == 0`, and the
-handler returns without `siglongjmp`-ing. The signal is "consumed".
-Subsequently `poll()` is called and blocks until the next `SIGALRM`
-(after `secs_left` seconds) or another signal arrives. With default
-`poll_time = 600`, the parent can hang for up to 10 minutes between a
-quick child exit and noticing it.
+**Fix** (in `src/watch.rs`):
 
-**Repro**: a mock-`ssh` that exits 255 in ≤ 100 ms causes the parent to
-hang ~poll_time seconds per restart. See the comment block in
-`tests/integration/run.sh` near `test_restart_on_exit_255` for the
-removed test that exposed this.
+1. `sigprocmask(SIG_BLOCK, &blockmask, &savedmask)` at function
+   entry blocks SIGCHLD/SIGALRM/SIGINT/SIGTERM/SIGHUP/SIGUSR1/USR2.
+2. The race window between `ssh_wait(WNOHANG)` and the wait point
+   is now signal-free; signals queue rather than fire.
+3. The wait itself uses `ppoll()` (with `savedmask` as the wait-time
+   sigmask) for the stderr-fd path, or `sigsuspend(&savedmask)` for
+   the pause-equivalent. Both atomically unblock-and-wait so the
+   queued signal is delivered the instant we begin waiting,
+   sig_catch can `siglongjmp` reliably.
+4. Each loop iteration re-applies SIG_BLOCK at the top (the CATCH
+   branch unblocks so ssh_kill / errlog can be interrupted by a
+   second termination signal — that powers the double-Ctrl+C
+   force-exit).
+5. Every `return` path restores the caller's mask via a small
+   `ret(savedmask, rc)` helper.
 
-**Workaround**: set `AUTOSSH_POLL` to a small value (e.g. `5`). This
-caps the per-iteration hang.
-
-**Proper fix sketch**:
-
-The race-free pattern is to block all relevant signals (`SIGCHLD`,
-`SIGALRM`, `SIGINT`, `SIGTERM`, `SIGUSR1`) during the critical section
-between `ssh_wait(WNOHANG)` and the wait point, then use `ppoll(2)`
-or `sigsuspend(2)` to atomically unblock-and-wait. Pseudocode:
-
-```c
-sigset_t blockmask, savedmask;
-/* fill blockmask with the signals above */
-sigprocmask(SIG_BLOCK, &blockmask, &savedmask);
-
-for (;;) {
-    if ((val = sigsetjmp(jumpbuf, 1)) == 0) {
-        r = ssh_wait(WNOHANG);          /* signals blocked here */
-        if (r != P_CONTINUE) {
-            sigprocmask(SIG_SETMASK, &savedmask, NULL);
-            return r;
-        }
-        /* ... set up alarm, dolongjmp=1 ... */
-        if (ssh_stderr_fd >= 0) {
-            ppoll(&spfd, 1, NULL, &savedmask);  /* atomic */
-        } else {
-            sigsuspend(&savedmask);
-        }
-    } else {
-        /* siglongjmp restored mask to whatever was saved at sigsetjmp */
-        switch(val) { /* ... */ }
-    }
-}
-```
-
-This is a non-trivial change to the signal-handling layer of `ssh_watch`
-and is intentionally out of scope for the testing/fix work in commits
-8986ca6 / a35c30a / 75cc0f8. Filed as a known issue so it isn't lost.
+**Verification**: a tight `MOCK_SSH_MODE=exit-fast-255` loop with
+`AUTOSSH_MAXSTART=3` that previously hung up to 1800s now completes
+in ~15ms (3 starts, default poll_time=600).
 
 ## C variadic logging shim — RESOLVED
 
@@ -70,8 +44,9 @@ by non-variadic `errlog_str(level, *const c_char)` /
 macros use Rust's native `format!` and convert to a `CString`
 before calling the shim, so all formatting happens in Rust.
 
-The only remaining C is a 12-line file `c-shim/jumpbuf.c`
+The only remaining C is a 13-line file `c-shim/jumpbuf.c`
 containing the typed `sigjmp_buf jumpbuf;` storage —
 `libc::sigjmp_buf` isn't exposed by the libc 0.2 crate so the
 typed instance still lives on the C side; Rust references it
 via the opaque `JmpBuf` extern type.
+

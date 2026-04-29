@@ -18,7 +18,7 @@ CFLAGS  := -g -O0 -Wall -Wextra -Wno-unused-parameter \
            -I$(TOPDIR) -I$(TOPDIR)/tests \
            --coverage
 
-WRAP_SYMS  := kill waitpid sleep alarm time _exit read write getenv poll
+WRAP_SYMS  := kill waitpid sleep alarm time _exit read write getenv poll ppoll
 WRAP_FLAGS := $(foreach s,$(WRAP_SYMS),-Wl,--wrap=$(s))
 
 LDFLAGS := --coverage

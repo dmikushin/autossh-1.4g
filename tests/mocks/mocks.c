@@ -278,6 +278,24 @@ int __wrap_poll(struct pollfd *fds, nfds_t nfds, int timeout)
     return 0;
 }
 
+/*
+ * ppoll() shares the queue and semantics with poll(). The timeout
+ * arg is a struct timespec*; we record it as a millisecond value
+ * for symmetry with poll's mock_poll_last_timeout_ms (NULL → -1).
+ * The sigmask arg is ignored: signal-mask handling is not what the
+ * tests are observing.
+ */
+int __wrap_ppoll(struct pollfd *fds, nfds_t nfds,
+                 const struct timespec *tmo, const void *sigmask)
+{
+    (void)sigmask;
+    int timeout_ms = -1;
+    if (tmo != NULL) {
+        timeout_ms = (int)(tmo->tv_sec * 1000 + tmo->tv_nsec / 1000000);
+    }
+    return __wrap_poll(fds, nfds, timeout_ms);
+}
+
 /* ---- master reset ------------------------------------------- */
 void mocks_reset(void)
 {
