@@ -651,38 +651,8 @@ ssh_run(int sock, char **av)
 }
 
 /*
- * Read available data from SSH stderr pipe and check for known
- * error patterns. Also forward the data to our own stderr so the
- * user can still see SSH messages.
- * Returns 1 if a fatal error was detected, 0 otherwise.
+ * check_ssh_stderr() — moved to src/stderr_drain.rs (Phase 4 port).
  */
-int
-check_ssh_stderr(void)
-{
-	char	buf[STDERR_BUF_SZ];
-	ssize_t	n;
-
-	if (ssh_stderr_fd < 0)
-		return 0;
-
-	while ((n = read(ssh_stderr_fd, buf, sizeof(buf) - 1)) > 0) {
-		buf[n] = '\0';
-		time(&last_stderr_time);
-		/* Forward to our stderr so user sees the messages */
-		if (write(STDERR_FILENO, buf, n) < 0) {
-			/* ignore write errors on stderr */
-		}
-
-		if (strstr(buf, "remote port forwarding failed")) {
-			errlog(LOG_ERR,
-			    "detected SSH error: remote port forwarding "
-			    "failed; will kill and restart ssh");
-			port_fwd_failed = 1;
-			return 1;
-		}
-	}
-	return 0;
-}
 
 /*
  * Periodically test network connection. On signals, determine what

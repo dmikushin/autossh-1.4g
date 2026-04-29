@@ -17,3 +17,4 @@ pub mod args;
 pub mod env;
 pub mod lifetime;
 pub mod signals;
+pub mod stderr_drain;
