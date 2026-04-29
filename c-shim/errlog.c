@@ -1,27 +1,26 @@
 /*
  *	autossh — C shim: variadic logging + sigjmp_buf storage.
  *
- *	Everything else has been ported to Rust (src/*.rs). The
- *	functions kept here exist because:
+ *	Everything else is in Rust (src/*.rs). This file is compiled
+ *	into the autossh staticlib via build.rs (cc crate) so cargo
+ *	can produce a self-contained binary; tests link against it
+ *	the same way.
+ *
+ *	The two reasons this still exists in C:
  *
  *	- errlog/xerrlog/doerrlog are C-variadic. Stable Rust can
- *	  call C variadic functions but cannot define them.
+ *	  call C variadic functions but cannot *define* them
+ *	  (rust-lang/rust#44930, still nightly-gated as of 1.95).
  *	- jumpbuf is sigjmp_buf-typed; libc::sigjmp_buf is not in
  *	  the Rust libc crate, so the storage lives in C and Rust
  *	  references it via an opaque extern type.
- *	- main() is a one-line wrapper around Rust's autossh_main().
  *
  *	From the example of rstunnel.
  *	Copyright (c) Carson Harding, 2002-2018. All rights reserved.
- *	$Id: autossh.c,v 1.91 2019/01/05 01:23:39 harding Exp $
  */
-
-#include "config.h"
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <syslog.h>
 #include <setjmp.h>
 #include <unistd.h>
@@ -44,7 +43,6 @@ extern FILE	*flog;
 extern char *timestr(void);
 extern void  ssh_kill(void);
 extern void  unlink_pid_file(void);
-extern int   autossh_main(int argc, char **argv);
 
 /* sigjmp_buf storage. Rust's signals.rs declares an opaque JmpBuf
  * extern; this is the actual instance the linker resolves. */
@@ -55,20 +53,12 @@ void
 doerrlog(int level, char *fmt, va_list ap)
 {
 	FILE	*fl;
-#ifndef HAVE_VSYSLOG
-	char	logbuf[1024];
-#endif
 
 	fl = flog;
 
 	if (loglevel >= level) {
 		if (logtype & L_SYSLOG) {
-#ifndef HAVE_VSYSLOG
-			(void)vsnprintf(logbuf, sizeof(logbuf), fmt, ap);
-			syslog(level, logbuf);
-#else
 			vsyslog(level, fmt, ap);
-#endif
 		} else if (!fl) {
 			fl = stderr;
 		}
@@ -104,12 +94,3 @@ xerrlog(int level, char *fmt, ...)
 	unlink_pid_file();
 	_exit(1);
 }
-
-#ifndef UNIT_TEST_NO_MAIN
-int
-main(int argc, char **argv)
-{
-	/* Body lives in src/main_logic.rs. */
-	return autossh_main(argc, argv);
-}
-#endif

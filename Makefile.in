@@ -1,9 +1,12 @@
-# $Id: Makefile.in,v 1.9 2019/01/05 01:24:52 harding Exp $
+# Build driver for autossh.
 #
-# @configure_input@
+# The binary is produced by `cargo build --release`. cargo invokes
+# build.rs which compiles the small C shim (c-shim/errlog.c) via the
+# cc crate and links it into the final binary. This Makefile is a
+# thin convenience wrapper so users with the autoconf habit see
+# familiar targets.
 
 VER=		1.4g
-
 SSH=		@path_ssh@
 
 prefix=		@prefix@
@@ -16,52 +19,30 @@ mandir=		@mandir@
 SRCDIR=		@srcdir@
 VPATH=		@srcdir@
 
-CC=		@CC@
-CFLAGS=		@CFLAGS@ -DVER=\"$(VER)\" -DSSH_PATH=\"$(SSH)\"
-CPPFLAGS=	@CPPFLAGS@
-
-OFILES=		autossh.o
-
-# Rust staticlib produced by `cargo build --release`. Progressively
-# replaces autossh.o symbols as functions are ported. Linking it in
-# unconditionally lets us delete a function from autossh.c and add
-# the same symbol via #[no_mangle] in src/ in a single commit.
-RUST_STATICLIB= target/release/libautossh.a
-
-# Linux Rust staticlibs need pthread + dl + m at link time even if the
-# crate doesn't appear to use them — Rust's std runtime references them.
-RUST_LIBS=	-lpthread -ldl -lm
-
-LD=		@LD@
-LDFLAGS=	@LDFLAGS@
-LIBS=		@LIBS@
-
 TARGET=		autossh
+CARGO_BIN=	target/release/$(TARGET)
 
-all:		$(TARGET) rust
+all:		$(TARGET)
 
 
-$(TARGET):	$(OFILES) rust
-		$(CC) $(CPPFLAGS) $(LDFLAGS) -o $(TARGET) $(OFILES) \
-			$(RUST_STATICLIB) $(LIBS) $(RUST_LIBS)
+$(TARGET):	$(CARGO_BIN)
+		cp $(CARGO_BIN) $(TARGET)
 
-# Rust co-build: produces target/release/libautossh.a (linked into
-# unit tests in place of autossh.o as functions are ported) and
-# target/release/autossh-rs (placeholder binary; not installed yet).
-.PHONY: rust
-rust:
+$(CARGO_BIN):	FORCE
 		cargo build --release
 
-check:		$(TARGET) rust
+.PHONY: FORCE
+FORCE:
+
+check:		$(TARGET)
 		$(MAKE) -C tests check
 
 clean:
-		- /bin/rm -f *.o *.a *.core *~
+		- /bin/rm -f *.o *.a *.core *~ $(TARGET)
 		- $(MAKE) -C tests clean 2>/dev/null || true
 		- cargo clean 2>/dev/null || true
 
 allclean:	clean
-		- /bin/rm -f $(TARGET)
 
 distclean:	allclean
 		- /bin/rm -f config.log config.cache config.status config.h
@@ -81,6 +62,6 @@ install:	$(TARGET)
 		chmod 755 $(DESTDIR)$(bindir)/$(TARGET)
 		chmod 644 $(DESTDIR)$(datadir)/doc/autossh/CHANGES
 		chmod 644 $(DESTDIR)$(datadir)/doc/autossh/README
-		chmod 644 $(DESTDIR)$(datadir)/examples/autossh/autossh.host 
+		chmod 644 $(DESTDIR)$(datadir)/examples/autossh/autossh.host
 		chmod 644 $(DESTDIR)$(datadir)/examples/autossh/rscreen
-		chmod 644 $(DESTDIR)$(mandir)/man1/autossh.1 
+		chmod 644 $(DESTDIR)$(mandir)/man1/autossh.1

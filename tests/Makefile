@@ -1,76 +1,59 @@
 # Makefile for autossh unit tests.
 #
-# Layout:
-#   tests/framework.h        - test macros
-#   tests/mocks/mocks.{h,c}  - --wrap libc syscalls
-#   tests/unit/test_*.c      - one test binary per source file
-#
-# Each test binary links autossh.c (compiled with UNIT_TEST_NO_MAIN)
-# against mocks.c with linker --wrap to redirect libc calls.
+# Each test binary links:
+#   - the test source (tests/unit/test_*.c)
+#   - the mocks library (tests/mocks/mocks.c, with -Wl,--wrap=<libc syscalls>)
+#   - the autossh staticlib (target/release/libautossh.a, the entire Rust
+#     port; produced by cargo)
+#   - a fresh copy of c-shim/errlog.c compiled here for test isolation,
+#     supplying the C-side errlog/xerrlog/doerrlog and jumpbuf storage
 #
 # Run from the project root:  make -C tests check
 
 CC      ?= gcc
 TOPDIR  := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
-# Build with coverage and full warnings; -O0 keeps line numbers stable
 CFLAGS  := -g -O0 -Wall -Wextra -Wno-unused-parameter \
            -DUNIT_TEST_NO_MAIN \
-           -DVER=\"test\" -DSSH_PATH=\"/usr/bin/ssh\" \
            -I$(TOPDIR) -I$(TOPDIR)/tests \
            --coverage
 
-# Symbols to intercept via ld --wrap
 WRAP_SYMS  := kill waitpid sleep alarm time _exit read write getenv poll
 WRAP_FLAGS := $(foreach s,$(WRAP_SYMS),-Wl,--wrap=$(s))
 
 LDFLAGS := --coverage
 LIBS    := -lnsl
 
-# Discover test sources
 UNIT_SRCS := $(wildcard $(TOPDIR)/tests/unit/test_*.c)
 UNIT_BINS := $(patsubst $(TOPDIR)/tests/unit/%.c,$(TOPDIR)/tests/unit/%,$(UNIT_SRCS))
 
-# Shared object files
-AUTOSSH_TEST_OBJ := $(TOPDIR)/tests/build/autossh-test.o
-MOCKS_OBJ        := $(TOPDIR)/tests/build/mocks.o
-
-# Rust staticlib hosting ported functions. As the C-to-Rust port
-# advances, more symbols come from this archive; the link order
-# (object first, then archive) lets archive members satisfy
-# undefined references from autossh-test.o.
-RUST_STATICLIB   := $(TOPDIR)/target/release/libautossh.a
-RUST_LIBS        := -lpthread -ldl -lm
+CSHIM_OBJ      := $(TOPDIR)/tests/build/cshim.o
+MOCKS_OBJ      := $(TOPDIR)/tests/build/mocks.o
+RUST_STATICLIB := $(TOPDIR)/target/release/libautossh.a
+RUST_LIBS      := -lpthread -ldl -lm
 
 .PHONY: all check clean
 
 all: $(UNIT_BINS)
 
-# Compile autossh.c with UNIT_TEST_NO_MAIN
-$(AUTOSSH_TEST_OBJ): $(TOPDIR)/autossh.c | $(TOPDIR)/tests/build
+$(CSHIM_OBJ): $(TOPDIR)/c-shim/errlog.c | $(TOPDIR)/tests/build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Compile mocks
 $(MOCKS_OBJ): $(TOPDIR)/tests/mocks/mocks.c $(TOPDIR)/tests/mocks/mocks.h | $(TOPDIR)/tests/build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(TOPDIR)/tests/build:
 	mkdir -p $@
 
-# Link rule for each test binary
-$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ) $(RUST_STATICLIB)
+$(TOPDIR)/tests/unit/%: $(TOPDIR)/tests/unit/%.c $(CSHIM_OBJ) $(MOCKS_OBJ) $(RUST_STATICLIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(WRAP_FLAGS) -o $@ \
-		$(TOPDIR)/tests/unit/$*.c $(AUTOSSH_TEST_OBJ) $(MOCKS_OBJ) \
+		$(TOPDIR)/tests/unit/$*.c $(CSHIM_OBJ) $(MOCKS_OBJ) \
 		$(RUST_STATICLIB) $(LIBS) $(RUST_LIBS)
 
 $(RUST_STATICLIB):
 	cd $(TOPDIR) && cargo build --release
 
 check: $(UNIT_BINS)
-	@# UNIT_BINS expands word-split into the for-loop. Make itself
-	@# can't handle whitespace in source-tree paths, so we don't
-	@# either. The "$$t" quoting below is what guards binary names
-	@# with spaces if a future fix lets Make handle them.
 	@fail=0; pass=0; \
 	for t in $(UNIT_BINS); do \
 		if "$$t"; then pass=$$((pass+1)); else fail=$$((fail+1)); fi; \
@@ -85,16 +68,6 @@ check: $(UNIT_BINS)
 		$(TOPDIR)/tests/integration/run.sh; \
 	else \
 		echo "Skipping integration: $(TOPDIR)/autossh not built (run 'make' first)"; \
-	fi
-
-coverage: check
-	@cd $(TOPDIR) && gcov -o tests/build autossh.c >/dev/null 2>&1 || true
-	@if [ -f $(TOPDIR)/autossh.c.gcov ]; then \
-		echo "Coverage of autossh.c:"; \
-		grep -E "^\s+#####:" $(TOPDIR)/autossh.c.gcov | wc -l \
-			| awk '{printf "  Uncovered lines: %s\n", $$1}'; \
-		grep -cE "^\s+[0-9]+:" $(TOPDIR)/autossh.c.gcov \
-			| awk '{printf "  Executed lines:  %s\n", $$1}'; \
 	fi
 
 clean:

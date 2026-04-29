@@ -1,14 +1,15 @@
-//! autossh — port of autossh.c to Rust.
+//! autossh — Rust port of the autossh.c monitor.
 //!
-//! This is the staticlib crate: every function and global tested from
-//! the existing C unit-test suite is re-exported with C ABI under the
-//! same name as the legacy autossh.c symbol. Tests link against
-//! libautossh.a in place of autossh.o.
+//! Every business decision lives in this crate. The two-file
+//! `c-shim/` directory holds the minimal C plumbing that stable
+//! Rust cannot express today:
+//!   - errlog/xerrlog/doerrlog: C-variadic logging entry points.
+//!   - jumpbuf: sigjmp_buf storage referenced by sig_catch via an
+//!     opaque extern type.
 //!
-//! As each function is moved to Rust the corresponding C definition
-//! is deleted and a `#[no_mangle] pub extern "C"` definition lands
-//! here. The unit test suite (linked via -Wl,--wrap=<libc syscalls>)
-//! validates each step.
+//! cargo's bin target (src/main.rs) is the entrypoint. build.rs
+//! compiles c-shim/errlog.c via the cc crate and links it into
+//! both the bin and the staticlib.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]

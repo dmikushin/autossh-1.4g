@@ -3,13 +3,14 @@ name = "autossh"
 version = "1.4.0"
 edition = "2021"
 rust-version = "1.70"
+build = "build.rs"
 
 [lib]
 name = "autossh"
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
 
 [[bin]]
-name = "autossh-rs"
+name = "autossh"
 path = "src/main.rs"
 
 [profile.release]
@@ -19,3 +20,6 @@ debug = true
 
 [dependencies]
 libc = "0.2"
+
+[build-dependencies]
+cc = "1"
