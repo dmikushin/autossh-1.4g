@@ -12,7 +12,7 @@ use std::ptr;
 
 const OPTION_STRING: &[u8] =
     b"M:V1246ab:c:e:fgi:kl:m:no:p:qstvw:xyACD:E:F:GI:MJKL:NO:PQ:R:S:TW:XYB:\0";
-const VER: &str = "1.4g";
+const VER: &str = "1.5.0";
 const NO_RD_SOCK: c_int = -2;
 const L_SYSLOG: c_int = 0x02;
 const P_EXITERR: c_int = 3;
