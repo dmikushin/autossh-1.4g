@@ -15,6 +15,13 @@
 //! so the body deliberately uses only POD: c_int, time_t, c_double,
 //! pollfd. No Vec, no String, no Box, no file handles.
 //!
+//! `errlog!` macros allocate (format! → String) and *would* leak
+//! if a siglongjmp interrupted them. To stay safe we clear
+//! `dolongjmp = 0` **before** every errlog! call inside the TRY
+//! branch's longjmp-armed window. The CATCH branch is naturally
+//! safe because sig_catch already cleared dolongjmp before
+//! siglongjmp'ing here.
+//!
 //! Test coverage: tests/unit/test_ssh_watch.c (11 cases including
 //! the SIGALRM-watchdog branches added in the recent fix).
 
@@ -23,6 +30,7 @@ use libc::{
     SIGABRT, SIGALRM, SIGINT, SIGQUIT, SIGTERM, WNOHANG,
 };
 
+use crate::errlog;
 use crate::signals::JmpBuf;
 
 const P_CONTINUE: c_int = 0;
@@ -50,9 +58,7 @@ extern "C" {
     static mut jumpbuf: JmpBuf;
 
     fn __sigsetjmp(env: *mut JmpBuf, savemask: c_int) -> c_int;
-    fn errlog(level: c_int, fmt: *const c_char, ...);
 
-    // Still C-resident.
     fn conn_test(sock: c_int, host: *const c_char, port: *const c_char) -> c_int;
 }
 
@@ -65,8 +71,7 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
 
     loop {
         if restart_ssh != 0 {
-            errlog(libc::LOG_INFO,
-                c"signalled to kill and restart ssh".as_ptr());
+            errlog!(libc::LOG_INFO, "signalled to kill and restart ssh");
             crate::kill::ssh_kill();
             return P_RESTART;
         }
@@ -95,9 +100,6 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                 }
             }
 
-            // Watchdog clamp: ensure SIGALRM fires often enough that
-            // the SIGALRM handler can detect stuck SSH within
-            // max_session seconds.
             if max_session > 0.0 && (SECS_LEFT as c_double) > max_session {
                 SECS_LEFT = max_session as c_int;
             }
@@ -107,8 +109,8 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
 
             // Race: signal could have arrived while setting up.
             if exit_signalled != 0 {
-                errlog(libc::LOG_INFO,
-                    c"signalled to exit".as_ptr());
+                dolongjmp = 0;
+                errlog!(libc::LOG_INFO, "signalled to exit");
                 crate::kill::ssh_kill();
                 return P_EXITERR;
             }
@@ -120,13 +122,16 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                     revents: 0,
                 };
                 libc::poll(&mut spfd, 1, SECS_LEFT * 1000);
+                // Past the poll wait; close the longjmp window so
+                // the rest of this branch can allocate freely.
+                dolongjmp = 0;
 
                 if (spfd.revents & POLLIN) != 0 {
                     if crate::stderr_drain::check_ssh_stderr() != 0 {
                         crate::kill::ssh_kill();
-                        errlog(libc::LOG_INFO,
-                            c"waiting %d seconds for port to be released".as_ptr(),
-                            PORT_FWD_FAIL_DELAY as c_int);
+                        errlog!(libc::LOG_INFO,
+                            "waiting {} seconds for port to be released",
+                            PORT_FWD_FAIL_DELAY);
                         libc::sleep(PORT_FWD_FAIL_DELAY);
                         return P_RESTART;
                     }
@@ -134,8 +139,7 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                 if (spfd.revents & (POLLHUP | POLLERR)) != 0
                     && (spfd.revents & POLLIN) == 0
                 {
-                    errlog(libc::LOG_INFO,
-                        c"SSH stderr pipe closed".as_ptr());
+                    errlog!(libc::LOG_INFO, "SSH stderr pipe closed");
                     libc::close(ssh_stderr_fd);
                     ssh_stderr_fd = -1;
                     if pipe_lost_time == 0 {
@@ -144,17 +148,18 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                 }
             } else {
                 libc::pause();
+                dolongjmp = 0;
             }
         } else {
-            // ----- CATCH branch (sig_catch siglongjmp'd here) -----
+            // ----- CATCH branch (sig_catch already cleared dolongjmp) -----
             match val {
                 v if v == SIGINT
                     || v == SIGTERM
                     || v == SIGQUIT
                     || v == SIGABRT =>
                 {
-                    errlog(libc::LOG_INFO,
-                        c"received signal to exit (%d)".as_ptr(), val);
+                    errlog!(libc::LOG_INFO,
+                        "received signal to exit ({})", val);
                     crate::kill::ssh_kill();
                     return P_EXITERR;
                 }
@@ -172,8 +177,8 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                             && libc::difftime(now, pipe_lost_time)
                                 >= max_session
                         {
-                            errlog(libc::LOG_WARNING,
-                                c"ssh child stuck for %.0f secs after stderr pipe lost; restarting".as_ptr(),
+                            errlog!(libc::LOG_WARNING,
+                                "ssh child stuck for {:.0} secs after stderr pipe lost; restarting",
                                 libc::difftime(now, pipe_lost_time));
                             crate::kill::ssh_kill();
                             return P_RESTART;
@@ -182,8 +187,8 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                             && libc::difftime(now, last_stderr_time)
                                 >= max_session
                         {
-                            errlog(libc::LOG_WARNING,
-                                c"ssh child silent on stderr for %.0f secs; considered stuck, restarting".as_ptr(),
+                            errlog!(libc::LOG_WARNING,
+                                "ssh child silent on stderr for {:.0} secs; considered stuck, restarting",
                                 libc::difftime(now, last_stderr_time));
                             crate::kill::ssh_kill();
                             return P_RESTART;
@@ -192,9 +197,9 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
 
                     if crate::stderr_drain::check_ssh_stderr() != 0 {
                         crate::kill::ssh_kill();
-                        errlog(libc::LOG_INFO,
-                            c"waiting %d seconds for port to be released".as_ptr(),
-                            PORT_FWD_FAIL_DELAY as c_int);
+                        errlog!(libc::LOG_INFO,
+                            "waiting {} seconds for port to be released",
+                            PORT_FWD_FAIL_DELAY);
                         libc::sleep(PORT_FWD_FAIL_DELAY);
                         return P_RESTART;
                     }
@@ -202,8 +207,7 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                     if !writep.is_null() && sock != -1
                         && conn_test(sock, mhost, writep) == 0
                     {
-                        errlog(libc::LOG_INFO,
-                            c"port down, restarting ssh".as_ptr());
+                        errlog!(libc::LOG_INFO, "port down, restarting ssh");
                         crate::kill::ssh_kill();
                         return P_RESTART;
                     }
@@ -213,5 +217,3 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
         }
     }
 }
-
-// (no module-level helpers; ssh_watch is the only entrypoint)

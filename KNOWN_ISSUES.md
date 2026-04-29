@@ -61,23 +61,17 @@ This is a non-trivial change to the signal-handling layer of `ssh_watch`
 and is intentionally out of scope for the testing/fix work in commits
 8986ca6 / a35c30a / 75cc0f8. Filed as a known issue so it isn't lost.
 
-## C variadic logging shim retained in autossh.c
+## C variadic logging shim — RESOLVED
 
-**Severity**: Architectural decision, not a bug.
+The C variadic functions (errlog, xerrlog, doerrlog) have been
+removed and replaced with Rust `errlog!`/`xerrlog!` macros backed
+by non-variadic `errlog_str(level, *const c_char)` /
+`xerrlog_str(level, *const c_char) -> !` in `src/log.rs`. The
+macros use Rust's native `format!` and convert to a `CString`
+before calling the shim, so all formatting happens in Rust.
 
-`errlog()`, `xerrlog()` and `doerrlog()` remain in autossh.c rather
-than being ported to Rust. Rationale:
-
-- They are C-variadic (`fmt, ...`). Stable Rust supports *calling*
-  C variadic functions but does not support *defining* them (the
-  `c_variadic` feature is nightly-only).
-- All Rust modules already invoke them via FFI; their interface
-  is stable and signal-safe.
-- Re-architecting the entire codebase to use a non-variadic
-  logging API (e.g. `errlog!(level, fmt, args...)` macro that
-  formats Rust-side and calls a `errlog_str(level, &CStr)` shim)
-  is mechanically large, gains nothing, and obscures call sites.
-
-In the final phase of the port, autossh.c will be reduced to
-*only* these three functions plus jumpbuf storage. They live
-behind a stable C ABI; everything else is Rust.
+The only remaining C is a 12-line file `c-shim/jumpbuf.c`
+containing the typed `sigjmp_buf jumpbuf;` storage —
+`libc::sigjmp_buf` isn't exposed by the libc 0.2 crate so the
+typed instance still lives on the C side; Rust references it
+via the opaque `JmpBuf` extern type.

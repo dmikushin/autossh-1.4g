@@ -3,10 +3,6 @@
 //! the tunnel and verify a round-trip payload. Returns 1 on
 //! success, 0 on any failure — ssh_watch uses 0 as the "tunnel
 //! is dead, restart" trigger.
-//!
-//! This is the HAVE_ADDRINFO branch only; the legacy
-//! gethostbyname() variant in autossh.c was Solaris-era plumbing
-//! that doesn't ship on any current Linux glibc.
 
 #![allow(unused_assignments)]
 
@@ -20,11 +16,11 @@ use libc::{
 };
 use std::ptr;
 
-/// Magic flag for echo-mode (no read socket).
+use crate::log::cstr_or;
+use crate::{errlog, xerrlog};
+
 const NO_RD_SOCK: c_int = -2;
-/// Maximum number of conn-test attempts before giving up.
 const MAX_CONN_TRIES: c_int = 3;
-/// Bytes appended to the test payload (max 64 + …).
 const MAX_MESSAGE: usize = 64;
 
 extern "C" {
@@ -32,15 +28,13 @@ extern "C" {
     static mut echo_message: *mut c_char;
     static __progname: *const c_char;
 
-    fn errlog(level: c_int, fmt: *const c_char, ...);
-    fn xerrlog(level: c_int, fmt: *const c_char, ...);
-
-    /// Required for the test payload's random ID; declared in
-    /// stdlib.h but not exposed by libc 0.2 on Linux.
     fn random() -> c_long;
-
-    /// uname() — fills utsname struct. Used in payload's nodename.
     fn uname(buf: *mut libc::utsname) -> c_int;
+}
+
+/// Helper: read errno and format strerror.
+unsafe fn errno_str() -> std::borrow::Cow<'static, str> {
+    cstr_or(strerror(*libc::__errno_location()), "?")
 }
 
 /// Convert host/port to addrinfo.
@@ -54,9 +48,8 @@ unsafe fn conn_addr(host: *const c_char, port: *const c_char) -> *mut addrinfo {
     let mut res: *mut addrinfo = ptr::null_mut();
     let err = getaddrinfo(host, port, &hints, &mut res);
     if err != 0 {
-        xerrlog(libc::LOG_ERR,
-            c"%s".as_ptr(),
-            gai_strerror(err));
+        let msg = cstr_or(gai_strerror(err), "?");
+        xerrlog!(libc::LOG_ERR, "{}", msg);
     }
     res
 }
@@ -66,7 +59,6 @@ pub unsafe extern "C" fn conn_remote(
     host: *const c_char,
     port: *const c_char,
 ) -> c_int {
-    // Cache the address info — matches C's `static struct addrinfo *res`.
     static mut RES: *mut addrinfo = ptr::null_mut();
     if RES.is_null() {
         RES = conn_addr(host, port);
@@ -75,15 +67,14 @@ pub unsafe extern "C" fn conn_remote(
 
     let sock = socket(res.ai_family, res.ai_socktype, res.ai_protocol);
     if sock == -1 {
-        xerrlog(libc::LOG_ERR,
-            c"socket: %s".as_ptr(),
-            strerror(*libc::__errno_location()));
+        xerrlog!(libc::LOG_ERR, "socket: {}", errno_str());
     }
 
     if connect(sock, res.ai_addr, res.ai_addrlen) == -1 {
-        errlog(libc::LOG_INFO,
-            c"%s:%s: %s".as_ptr(),
-            host, port, strerror(*libc::__errno_location()));
+        let h = cstr_or(host, "");
+        let p = cstr_or(port, "");
+        let e = errno_str();
+        errlog!(libc::LOG_INFO, "{}:{}: {}", h, p, e);
         close(sock);
         return -1;
     }
@@ -100,9 +91,7 @@ pub unsafe extern "C" fn conn_listen(
 
     let sock = socket(res.ai_family, res.ai_socktype, res.ai_protocol);
     if sock == -1 {
-        xerrlog(libc::LOG_ERR,
-            c"socket: %s".as_ptr(),
-            strerror(*libc::__errno_location()));
+        xerrlog!(libc::LOG_ERR, "socket: {}", errno_str());
     }
 
     let on: c_int = 1;
@@ -111,21 +100,18 @@ pub unsafe extern "C" fn conn_listen(
         &on as *const _ as *const c_void,
         std::mem::size_of::<c_int>() as socklen_t,
     ) != 0 {
-        xerrlog(libc::LOG_ERR,
-            c"setsockopt: %s".as_ptr(),
-            strerror(*libc::__errno_location()));
+        xerrlog!(libc::LOG_ERR, "setsockopt: {}", errno_str());
     }
 
     if bind(sock, res.ai_addr, res.ai_addrlen) == -1 {
-        xerrlog(libc::LOG_ERR,
-            c"bind on %s:%s: %s".as_ptr(),
-            host, port, strerror(*libc::__errno_location()));
+        let h = cstr_or(host, "");
+        let p = cstr_or(port, "");
+        let e = errno_str();
+        xerrlog!(libc::LOG_ERR, "bind on {}:{}: {}", h, p, e);
     }
 
     if listen(sock, 1) < 0 {
-        xerrlog(libc::LOG_ERR,
-            c"listen: %s".as_ptr(),
-            strerror(*libc::__errno_location()));
+        xerrlog!(libc::LOG_ERR, "listen: {}", errno_str());
     }
 
     freeaddrinfo(res_ptr);
@@ -145,14 +131,13 @@ pub unsafe extern "C" fn conn_poll_for_accept(
     loop {
         match libc::poll(pfd, 1, timeo_polla) {
             0 => {
-                errlog(libc::LOG_INFO,
-                    c"timeout polling to accept read connection".as_ptr());
+                errlog!(libc::LOG_INFO,
+                    "timeout polling to accept read connection");
                 return -1;
             }
             -1 => {
-                errlog(libc::LOG_ERR,
-                    c"error polling to accept read connection: %s".as_ptr(),
-                    strerror(*libc::__errno_location()));
+                errlog!(libc::LOG_ERR,
+                    "error polling to accept read connection: {}", errno_str());
                 return -1;
             }
             _ => {}
@@ -162,14 +147,13 @@ pub unsafe extern "C" fn conn_poll_for_accept(
             let mut len: socklen_t = std::mem::size_of::<sockaddr>() as socklen_t;
             let rd = accept(sock, &mut cliaddr, &mut len);
             if rd == -1 {
-                errlog(libc::LOG_ERR,
-                    c"error accepting read connection: %s".as_ptr(),
-                    strerror(*libc::__errno_location()));
+                errlog!(libc::LOG_ERR,
+                    "error accepting read connection: {}", errno_str());
                 return -1;
             }
             return rd;
         }
-        return 0;  // matches C: falls through to break in inner switch
+        return 0;
     }
 }
 
@@ -254,8 +238,7 @@ pub unsafe extern "C" fn conn_send_and_receive(
         if loops > 5 {
             libc::sleep(1);
             if loops > 10 {
-                errlog(libc::LOG_INFO,
-                    c"too many loops without data".as_ptr());
+                errlog!(libc::LOG_INFO, "too many loops without data");
                 return -1;
             }
         }
@@ -263,7 +246,6 @@ pub unsafe extern "C" fn conn_send_and_receive(
     0
 }
 
-/// Test the connection. Returns 1 on success, 0 on failure.
 #[no_mangle]
 pub unsafe extern "C" fn conn_test(
     sock: c_int,
@@ -279,7 +261,6 @@ pub unsafe extern "C" fn conn_test(
     uname(&mut uts);
     let id: c_long = random();
 
-    // Open write socket.
     wd = conn_remote(host, write_port);
     if wd == -1 {
         return 0;
@@ -290,28 +271,23 @@ pub unsafe extern "C" fn conn_test(
         pollfd { fd: wd, events: POLLOUT, revents: 0 },
     ];
 
-    // Buffer sized for nodename + format + echo_message margin.
     const BUF_SZ: usize = 64 + 65 + MAX_MESSAGE;
     let mut wbuf = [0u8; BUF_SZ];
     let mut rbuf = [0u8; BUF_SZ];
 
     while tries < MAX_CONN_TRIES {
         if tries + 1 >= MAX_CONN_TRIES {
-            errlog(libc::LOG_DEBUG,
-                c"tried connection %d times and failed".as_ptr(),
-                tries + 1);
+            errlog!(libc::LOG_DEBUG, "tried connection {} times and failed", tries + 1);
             tries += 1;
             break;
         }
 
-        // Close stale read socket from previous iteration.
         if sock != NO_RD_SOCK && rd != -1 {
             shutdown(rd, SHUT_RDWR);
             close(rd);
             rd = -1;
         }
 
-        // Build payload.
         let nodename_ptr = uts.nodename.as_ptr();
         let progname = if __progname.is_null() {
             c"autossh".as_ptr()
@@ -325,14 +301,12 @@ pub unsafe extern "C" fn conn_test(
             nodename_ptr, progname,
             getpid() as c_int, id, echo_message);
         if n as usize >= BUF_SZ {
-            xerrlog(libc::LOG_ERR,
-                c"conn_test: buffer overflow".as_ptr());
+            xerrlog!(libc::LOG_ERR, "conn_test: buffer overflow");
         }
         rbuf.fill(0);
 
         let ntopoll: c_int;
         if sock != NO_RD_SOCK {
-            // Loopback mode: poll for accept then use both fds.
             rd = conn_poll_for_accept(sock, pfd.as_mut_ptr());
             if rd < 0 {
                 tries += 1;
@@ -342,7 +316,6 @@ pub unsafe extern "C" fn conn_test(
             pfd[0].events = POLLIN;
             ntopoll = 2;
         } else {
-            // Echo service mode.
             pfd[0].fd = wd;
             pfd[0].events = POLLIN | POLLOUT;
             ntopoll = 1;
@@ -359,22 +332,19 @@ pub unsafe extern "C" fn conn_test(
         if send_error == 0 {
             if libc::strcmp(rbuf.as_ptr() as *const c_char,
                             wbuf.as_ptr() as *const c_char) == 0 {
-                errlog(libc::LOG_DEBUG, c"connection ok".as_ptr());
+                errlog!(libc::LOG_DEBUG, "connection ok");
                 rval = 1;
                 tries += 1;
                 break;
             } else {
-                errlog(libc::LOG_DEBUG,
-                    c"not what I sent: \"%s\" : \"%s\"".as_ptr(),
-                    wbuf.as_ptr(), rbuf.as_ptr());
+                let w = cstr_or(wbuf.as_ptr() as *const c_char, "");
+                let r = cstr_or(rbuf.as_ptr() as *const c_char, "");
+                errlog!(libc::LOG_DEBUG, "not what I sent: \"{}\" : \"{}\"", w, r);
             }
         } else if send_error == 1 {
-            errlog(libc::LOG_DEBUG,
-                c"timeout on io poll, looping to accept again".as_ptr());
+            errlog!(libc::LOG_DEBUG, "timeout on io poll, looping to accept again");
         } else {
-            errlog(libc::LOG_DEBUG,
-                c"error on poll: %s".as_ptr(),
-                strerror(*libc::__errno_location()));
+            errlog!(libc::LOG_DEBUG, "error on poll: {}", errno_str());
             tries += 1;
             break;
         }

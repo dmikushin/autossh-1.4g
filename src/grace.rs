@@ -8,7 +8,9 @@
 //!
 //! Test coverage: tests/unit/test_grace_time.c (6 cases).
 
-use libc::{c_char, c_double, c_int, c_uint, time_t};
+use libc::{c_double, c_int, c_uint, time_t};
+
+use crate::errlog;
 
 const N_FAST_TRIES: c_int = 5;
 const PORT_FWD_FAIL_DELAY: c_uint = 5;
@@ -16,8 +18,6 @@ const PORT_FWD_FAIL_DELAY: c_uint = 5;
 extern "C" {
     static mut poll_time: c_int;
     static mut port_fwd_failed: c_int; // volatile sig_atomic_t
-
-    fn errlog(level: c_int, fmt: *const c_char, ...);
 }
 
 /// Replaces C's `static int tries;` inside grace_time.
@@ -51,9 +51,9 @@ pub unsafe extern "C" fn grace_time(last_start: time_t) {
     }
 
     if port_fwd_failed != 0 {
-        errlog(libc::LOG_INFO,
-            c"port forwarding failed on previous attempt, enforcing minimum %d second delay".as_ptr(),
-            PORT_FWD_FAIL_DELAY as c_int);
+        errlog!(libc::LOG_INFO,
+            "port forwarding failed on previous attempt, enforcing minimum {} second delay",
+            PORT_FWD_FAIL_DELAY);
         libc::sleep(PORT_FWD_FAIL_DELAY);
         port_fwd_failed = 0;
     }

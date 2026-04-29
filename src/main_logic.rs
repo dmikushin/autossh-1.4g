@@ -28,10 +28,11 @@ extern "C" {
     static mut opterr: c_int;
     static mut optind: c_int;
 
-    fn errlog(level: c_int, fmt: *const c_char, ...);
-    fn xerrlog(level: c_int, fmt: *const c_char, ...);
     fn fprintf(stream: *mut FILE, fmt: *const c_char, ...) -> c_int;
 }
+
+use crate::log::cstr_or;
+use crate::{errlog, xerrlog};
 
 #[no_mangle]
 pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
@@ -100,8 +101,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         let mut end: *mut c_char = ptr::null_mut();
         ep = libc::strtoul(echop, &mut end, 0) as c_uint;
         if *echop == 0 || (!end.is_null() && *end != 0) || ep == 0 {
-            xerrlog(libc::LOG_ERR,
-                c"invalid echo port  \"%s\"".as_ptr(), echop);
+            xerrlog!(libc::LOG_ERR, "invalid echo port  \"{}\"", cstr_or(echop, ""));
         }
     }
 
@@ -121,17 +121,14 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         let mut end: *mut c_char = ptr::null_mut();
         wp = libc::strtoul(writep, &mut end, 0) as c_int;
         if *writep == 0 || (!end.is_null() && *end != 0) {
-            xerrlog(libc::LOG_ERR,
-                c"invalid port \"%s\"".as_ptr(), writep);
+            xerrlog!(libc::LOG_ERR, "invalid port \"{}\"", cstr_or(writep, ""));
         }
     }
     if wp == 0 {
-        errlog(libc::LOG_INFO,
-            c"port set to 0, monitoring disabled".as_ptr());
+        errlog!(libc::LOG_INFO, "port set to 0, monitoring disabled");
         writep = ptr::null_mut();
     } else if wp > 65534 || wp < 0 {
-        xerrlog(libc::LOG_ERR,
-            c"monitor port (%d) out of range".as_ptr(), wp);
+        xerrlog!(libc::LOG_ERR, "monitor port ({}) out of range", wp);
     } else {
         rp = wp + 1;
         libc::snprintf(readp.as_mut_ptr() as *mut c_char,
@@ -143,8 +140,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
             c"%d:%s:%d".as_ptr(),
             wp, mhost, echo_port);
         if n as usize > wmbuf.len() {
-            xerrlog(libc::LOG_ERR,
-                c"overflow building forwarding string".as_ptr());
+            xerrlog!(libc::LOG_ERR, "overflow building forwarding string");
         }
         if echop.is_null() {
             let n = libc::snprintf(
@@ -153,8 +149,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
                 c"%d:%s:%d".as_ptr(),
                 wp, mhost, rp);
             if n as usize > rmbuf.len() {
-                xerrlog(libc::LOG_ERR,
-                    c"overflow building forwarding string".as_ptr());
+                xerrlog!(libc::LOG_ERR, "overflow building forwarding string");
             }
         }
     }
@@ -162,9 +157,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     // 5. Adjust net_timeout if poll_time is short.
     if (poll_time * 1000) / 2 < net_timeout {
         net_timeout = (poll_time * 1000) / 2;
-        errlog(libc::LOG_INFO,
-            c"short poll time: adjusting net timeouts to %d".as_ptr(),
-            net_timeout);
+        errlog!(libc::LOG_INFO, "short poll time: adjusting net timeouts to {}", net_timeout);
     }
 
     // 6. Build new argv list, skipping -f / -M and inserting -L/-R.
@@ -230,9 +223,8 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
 
     if runasdaemon != 0 {
         if libc::daemon(0, 0) == -1 {
-            xerrlog(libc::LOG_ERR,
-                c"run as daemon failed: %s".as_ptr(),
-                libc::strerror(*libc::__errno_location()));
+            let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
+            xerrlog!(libc::LOG_ERR, "run as daemon failed: {}", err);
         }
         gate_time = 0.0;
     }
@@ -252,19 +244,17 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     if !pid_file_name.is_null() {
         let pid_file = libc::fopen(pid_file_name, c"w".as_ptr());
         if pid_file.is_null() {
-            xerrlog(libc::LOG_ERR,
-                c"cannot open pid file \"%s\": %s".as_ptr(),
-                pid_file_name,
-                libc::strerror(*libc::__errno_location()));
+            let path = cstr_or(pid_file_name, "");
+            let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
+            xerrlog!(libc::LOG_ERR, "cannot open pid file \"{}\": {}", path, err);
         }
         pid_file_created = 1;
         libc::atexit(unlink_pid_atexit);
         if fprintf(pid_file, c"%d\n".as_ptr(),
                    libc::getpid() as c_int) == 0 {
-            xerrlog(libc::LOG_ERR,
-                c"write failed to pid file \"%s\": %s".as_ptr(),
-                pid_file_name,
-                libc::strerror(*libc::__errno_location()));
+            let path = cstr_or(pid_file_name, "");
+            let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
+            xerrlog!(libc::LOG_ERR, "write failed to pid file \"{}\": {}", path, err);
         }
         libc::fflush(pid_file);
         libc::fclose(pid_file);

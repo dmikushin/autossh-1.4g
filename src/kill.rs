@@ -11,7 +11,10 @@
 //! Test coverage: tests/unit/test_ssh_kill.c (8 cases including
 //! the "completes within 4 seconds" contract).
 
-use libc::{c_char, c_int};
+use libc::c_int;
+
+use crate::errlog;
+use crate::log::cstr_or;
 
 const SIGTERM_GRACE: c_int = 2;
 const SIGKILL_WAIT:  c_int = 2;
@@ -19,8 +22,6 @@ const SIGKILL_WAIT:  c_int = 2;
 extern "C" {
     static mut cchild: c_int;
     static mut ssh_stderr_fd: c_int;
-
-    fn errlog(level: c_int, fmt: *const c_char, ...);
 }
 
 /// `ssh_kill()`: kill the SSH child process aggressively.
@@ -43,24 +44,18 @@ pub unsafe extern "C" fn ssh_kill() {
     }
 
     // SIGTERM didn't work, escalate to SIGKILL.
-    errlog(
-        libc::LOG_WARNING,
-        c"ssh child %d did not exit after %d seconds, sending SIGKILL".as_ptr(),
-        cchild as c_int,
-        SIGTERM_GRACE,
-    );
+    errlog!(libc::LOG_WARNING,
+        "ssh child {} did not exit after {} seconds, sending SIGKILL",
+        cchild, SIGTERM_GRACE);
     libc::kill(cchild, libc::SIGKILL);
 
     if reap_with_grace(SIGKILL_WAIT, &mut status, true) {
         return;
     }
 
-    errlog(
-        libc::LOG_ERR,
-        c"ssh child %d not dead after SIGKILL + %d seconds (likely in uninterruptible state); abandoning".as_ptr(),
-        cchild as c_int,
-        SIGKILL_WAIT,
-    );
+    errlog!(libc::LOG_ERR,
+        "ssh child {} not dead after SIGKILL + {} seconds (likely in uninterruptible state); abandoning",
+        cchild, SIGKILL_WAIT);
     cchild = 0;
 }
 
@@ -88,14 +83,11 @@ unsafe fn reap_with_grace(
                 return true;
             }
             if e != libc::EINTR {
+                let err_msg = cstr_or(libc::strerror(e), "?");
                 if after_sigkill {
-                    errlog(libc::LOG_ERR,
-                        c"waitpid after SIGKILL: %s".as_ptr(),
-                        libc::strerror(e));
+                    errlog!(libc::LOG_ERR, "waitpid after SIGKILL: {}", err_msg);
                 } else {
-                    errlog(libc::LOG_ERR,
-                        c"waitpid: %s".as_ptr(),
-                        libc::strerror(e));
+                    errlog!(libc::LOG_ERR, "waitpid: {}", err_msg);
                 }
                 cchild = 0;
                 return true;

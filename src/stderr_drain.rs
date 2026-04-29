@@ -13,13 +13,14 @@
 
 use libc::{c_char, c_int, c_void, size_t, ssize_t, time_t};
 
+use crate::errlog;
+
 const STDERR_BUF_SZ: usize = 4096;
 
 extern "C" {
     static mut ssh_stderr_fd: c_int;
     static mut last_stderr_time: time_t;
     static mut port_fwd_failed: c_int; // volatile sig_atomic_t
-    fn errlog(level: c_int, fmt: *const c_char, ...);
 }
 
 /// Drain the SSH stderr pipe; forward to our stderr; flag fatal
@@ -57,10 +58,8 @@ pub unsafe extern "C" fn check_ssh_stderr() -> c_int {
         let needle = c"remote port forwarding failed".as_ptr();
         let found = libc::strstr(buf.as_ptr() as *const c_char, needle);
         if !found.is_null() {
-            errlog(
-                libc::LOG_ERR,
-                c"detected SSH error: remote port forwarding failed; will kill and restart ssh".as_ptr(),
-            );
+            errlog!(libc::LOG_ERR,
+                "detected SSH error: remote port forwarding failed; will kill and restart ssh");
             port_fwd_failed = 1;
             return 1;
         }

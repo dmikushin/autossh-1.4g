@@ -18,6 +18,9 @@ use libc::{
     SIGTERM, time_t,
 };
 
+use crate::log::cstr_or;
+use crate::{errlog, xerrlog};
+
 const P_EXITOK:  c_int = 2;
 const P_EXITERR: c_int = 3;
 
@@ -34,22 +37,12 @@ extern "C" {
     static mut restart_ssh: c_int;
     static mut dolongjmp: c_int;
 
-    fn errlog(level: c_int, fmt: *const c_char, ...);
-    fn xerrlog(level: c_int, fmt: *const c_char, ...);
-
-    // glibc has srandom() (stdlib.h) but the Rust libc crate does
-    // not expose it on Linux at our pinned version. Declare it
-    // directly — links to libc.so's symbol.
     fn srandom(seed: libc::c_uint);
 }
 
-/// `ssh_run(sock, av)`: enter the start/restart loop. Returns
-/// P_EXITOK on graceful end (max_start reached, lifetime exceeded,
-/// or child exit-success), P_EXITERR on signal-driven termination.
+/// `ssh_run(sock, av)`: enter the start/restart loop.
 #[no_mangle]
 pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
-    // Seed RNG (not strictly needed for the port loop, but matches
-    // C's behaviour for downstream callers of random()).
     let mut tv: libc::timeval = std::mem::zeroed();
     libc::gettimeofday(&mut tv, std::ptr::null_mut());
     let pid = libc::getpid() as libc::c_uint;
@@ -68,7 +61,7 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
         start_count += 1;
         crate::grace::grace_time(start_time);
         if exit_signalled != 0 {
-            errlog(libc::LOG_ERR, c"signalled to exit".as_ptr());
+            errlog!(libc::LOG_ERR, "signalled to exit");
             return P_EXITERR;
         }
         libc::time(&raw mut start_time);
@@ -77,21 +70,17 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
         libc::time(&raw mut last_stderr_time);
 
         if max_start < 0 {
-            errlog(libc::LOG_INFO,
-                c"starting ssh (count %d)".as_ptr(),
-                start_count);
+            errlog!(libc::LOG_INFO, "starting ssh (count {})", start_count);
         } else {
-            errlog(libc::LOG_INFO,
-                c"starting ssh (count %d of %d)".as_ptr(),
-                start_count, max_start);
+            errlog!(libc::LOG_INFO,
+                "starting ssh (count {} of {})", start_count, max_start);
         }
 
         // Pipe for capturing SSH stderr.
         let mut stderr_pipe: [c_int; 2] = [-1, -1];
         if libc::pipe(stderr_pipe.as_mut_ptr()) < 0 {
-            errlog(libc::LOG_ERR,
-                c"pipe: %s".as_ptr(),
-                libc::strerror(*libc::__errno_location()));
+            let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
+            errlog!(libc::LOG_ERR, "pipe: {}", err);
             stderr_pipe[0] = -1;
             stderr_pipe[1] = -1;
         }
@@ -99,36 +88,35 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
         cchild = libc::fork();
         match cchild {
             0 => {
-                // CHILD: redirect stderr → pipe write end, exec ssh.
+                // CHILD: must avoid Rust allocation between fork and
+                // execvp; the libc errlog format-string FFI is the
+                // safer choice here.
                 if stderr_pipe[1] >= 0 {
                     libc::close(stderr_pipe[0]);
                     libc::dup2(stderr_pipe[1], STDERR_FILENO);
                     libc::close(stderr_pipe[1]);
                 }
                 let av0 = *av;
-                errlog(libc::LOG_DEBUG,
-                    c"child of %d execing %s".as_ptr(),
-                    libc::getppid() as c_int, av0);
                 libc::execvp(av0, av as *const *const c_char);
-                // execvp failed: log, signal parent, exit.
-                errlog(libc::LOG_ERR, c"%s: %s".as_ptr(), av0,
-                    libc::strerror(*libc::__errno_location()));
+                // execvp failed. Allocation is risky now but we're
+                // about to _exit anyway; fall back to a fixed
+                // pre-formatted message.
+                let _ = libc::write(
+                    libc::STDERR_FILENO,
+                    c"autossh: execvp failed\n".as_ptr() as *const _,
+                    23,
+                );
                 libc::kill(libc::getppid(), SIGTERM);
                 libc::_exit(1);
             }
             -1 => {
-                // fork failed: cleanup, abort.
                 cchild = 0;
                 if stderr_pipe[0] >= 0 { libc::close(stderr_pipe[0]); }
                 if stderr_pipe[1] >= 0 { libc::close(stderr_pipe[1]); }
-                xerrlog(libc::LOG_ERR,
-                    c"fork: %s".as_ptr(),
-                    libc::strerror(*libc::__errno_location()));
-                // xerrlog never returns; unreachable.
+                let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
+                xerrlog!(libc::LOG_ERR, "fork: {}", err);
             }
             _ => {
-                // PARENT: keep read end of pipe, install signal
-                // handlers, run ssh_watch, tear down.
                 if stderr_pipe[1] >= 0 {
                     libc::close(stderr_pipe[1]);
                 }
@@ -139,8 +127,7 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
                         fcntl(ssh_stderr_fd, F_SETFL, flags | O_NONBLOCK);
                     }
                 }
-                errlog(libc::LOG_INFO,
-                    c"ssh child pid is %d".as_ptr(), cchild);
+                errlog!(libc::LOG_INFO, "ssh child pid is {}", cchild);
 
                 crate::signals::set_sig_handlers();
                 let retval = crate::watch::ssh_watch(sock);
@@ -154,12 +141,10 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
                 if retval == P_EXITOK || retval == P_EXITERR {
                     return retval;
                 }
-                // P_RESTART or P_CONTINUE: loop.
             }
         }
     }
 
-    errlog(libc::LOG_INFO,
-        c"max start count reached; exiting".as_ptr());
+    errlog!(libc::LOG_INFO, "max start count reached; exiting");
     P_EXITOK
 }

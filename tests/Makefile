@@ -36,7 +36,7 @@ RUST_LIBS      := -lpthread -ldl -lm
 
 all: $(UNIT_BINS)
 
-$(CSHIM_OBJ): $(TOPDIR)/c-shim/errlog.c | $(TOPDIR)/tests/build
+$(CSHIM_OBJ): $(TOPDIR)/c-shim/jumpbuf.c | $(TOPDIR)/tests/build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(MOCKS_OBJ): $(TOPDIR)/tests/mocks/mocks.c $(TOPDIR)/tests/mocks/mocks.h | $(TOPDIR)/tests/build
