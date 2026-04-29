@@ -67,7 +67,12 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
         libc::time(&raw mut start_time);
         port_fwd_failed = 0;
         pipe_lost_time = 0;
-        libc::time(&raw mut last_stderr_time);
+        // Sentinel: 0 means "ssh has not produced any stderr output
+        // yet". check_ssh_stderr will write the real time on the
+        // first successful read; until then, the silence watchdog
+        // in ssh_watch treats this child as still in initial
+        // connect.
+        last_stderr_time = 0;
 
         if max_start < 0 {
             errlog!(libc::LOG_INFO, "starting ssh (count {})", start_count);

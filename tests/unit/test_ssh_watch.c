@@ -227,19 +227,29 @@ TEST(port_fwd_failed_pattern_triggers_restart)
 /*
  * Drive ssh_watch into the SIGALRM branch by having mock poll()
  * inject a synthetic SIGALRM via sig_catch. With max_session set
- * and last_stderr_time stale (past max_session), the watchdog must
- * kill the child and return P_RESTART.
+ * and last_stderr_time still at the 0 sentinel (ssh has never
+ * produced any stderr — the "stuck in initial connect" signature),
+ * the watchdog must kill the child and return P_RESTART.
  *
- * This is the unit-level guard for the recent stderr-silence fix
- * — without it, the only test of that branch is integration.
+ * Healthy long-running ssh sessions are silent on stderr by design
+ * (`ssh -N`), so the watchdog deliberately does NOT fire merely
+ * because last_stderr_time is old; it requires the 0 sentinel.
+ *
+ * Regression: an earlier version killed healthy sessions every
+ * max_session seconds because it checked silence against the most
+ * recent read instead of "ever received".
  */
 TEST(sigalrm_silence_watchdog_kills_child)
 {
     setup();
     max_session       = 5;
-    /* Pretend ssh hasn't said anything for 10 seconds. */
-    last_stderr_time  = mock_current_time - 10;
+    /* 0 sentinel: ssh has not produced any stderr since fork. */
+    last_stderr_time  = 0;
     pipe_lost_time    = 0;
+    /* start_time was set by setup() to mock_current_time. Pretend
+     * 10 seconds have passed since the fork so we're past
+     * max_session. */
+    start_time        = mock_current_time - 10;
 
     /* WNOHANG: child still alive */
     enq_waitpid(0, 0);
@@ -307,6 +317,38 @@ TEST(sigalrm_no_silence_does_not_kill)
     ASSERT_EQ(mock_kill_call_count, 0);
 }
 
+/* ---- Regression: healthy long-running ssh must NOT be killed ---- */
+/*
+ * The user's bug report: AUTOSSH_MAX_SESSION=60 was killing live
+ * ssh -N sessions every 60 seconds because ssh -N is silent on
+ * stderr by design after the initial connection-setup messages.
+ *
+ * Setup: ssh started 5 minutes ago, produced one stderr message
+ * (e.g. "Pseudo-terminal will not be allocated") immediately after
+ * fork, then went silent. max_session=60. Watchdog must NOT fire.
+ */
+TEST(sigalrm_silence_watchdog_does_not_kill_after_first_stderr)
+{
+    setup();
+    max_session       = 60;
+    pipe_lost_time    = 0;
+    /* ssh produced its first stderr ~5 minutes ago (then went
+     * silent — entirely normal for ssh -N). */
+    start_time        = mock_current_time - 300;
+    last_stderr_time  = mock_current_time - 290;
+
+    enq_waitpid(0, 0);                                    /* alive */
+    mock_poll_queue[mock_poll_qlen].revents[0] = 0;
+    mock_poll_queue[mock_poll_qlen].ret       = 0;
+    mock_poll_queue[mock_poll_qlen].raise_sig = SIGALRM;
+    mock_poll_qlen++;
+    enq_waitpid(CHILD_PID, 0);                            /* exit ok */
+
+    int rc = ssh_watch(-1);
+    ASSERT_EQ(rc, P_EXITOK);
+    ASSERT_EQ(mock_kill_call_count, 0);
+}
+
 TEST_SUITE_BEGIN("ssh_watch")
     RUN_TEST(exit_signalled_returns_exiterr);
     RUN_TEST(restart_ssh_flag_returns_restart);
@@ -319,4 +361,5 @@ TEST_SUITE_BEGIN("ssh_watch")
     RUN_TEST(sigalrm_silence_watchdog_kills_child);
     RUN_TEST(sigalrm_pipe_lost_watchdog_kills_child);
     RUN_TEST(sigalrm_no_silence_does_not_kill);
+    RUN_TEST(sigalrm_silence_watchdog_does_not_kill_after_first_stderr);
 TEST_SUITE_END

@@ -22,7 +22,7 @@ test_watchdog_silence() {
         echo "  watchdog did not fire — autossh still alive"
         return 1
     fi
-    assert_log_contains "silent on stderr" || return 1
+    assert_log_contains "produced no stderr" || return 1
     assert_log_contains "max start count reached" || return 1
 }
 

@@ -48,6 +48,7 @@ const PORT_FWD_FAIL_DELAY: c_uint = 5;
 extern "C" {
     static mut ssh_stderr_fd: c_int;
     static mut pid_start_time: time_t;
+    static mut start_time: time_t;
     static mut pipe_lost_time: time_t;
     static mut last_stderr_time: time_t;
     static mut max_session: c_double;
@@ -227,6 +228,8 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                     if max_session > 0.0 {
                         let mut now: time_t = 0;
                         libc::time(&raw mut now);
+                        // Pipe-lost watchdog: SSH stderr fd was
+                        // closed; child is dying or already dead.
                         if pipe_lost_time != 0
                             && libc::difftime(now, pipe_lost_time)
                                 >= max_session
@@ -237,13 +240,23 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                             crate::kill::ssh_kill();
                             return ret(&savedmask, P_RESTART);
                         }
-                        if last_stderr_time != 0
-                            && libc::difftime(now, last_stderr_time)
+                        // Initial-connect watchdog: ssh has *never*
+                        // produced any stderr output (last_stderr_time
+                        // is the 0 sentinel set by ssh_run, cleared
+                        // by check_ssh_stderr on the first read).
+                        // Once the child says ANYTHING — even just
+                        // "Pseudo-terminal will not be allocated"
+                        // — the connection is considered established
+                        // and silence is normal (`ssh -N` is mute by
+                        // design). This prevents the watchdog from
+                        // killing healthy long-running sessions.
+                        if last_stderr_time == 0
+                            && libc::difftime(now, start_time)
                                 >= max_session
                         {
                             errlog!(libc::LOG_WARNING,
-                                "ssh child silent on stderr for {:.0} secs; considered stuck, restarting",
-                                libc::difftime(now, last_stderr_time));
+                                "ssh produced no stderr in {:.0} secs since start; assuming stuck in connect, restarting",
+                                libc::difftime(now, start_time));
                             crate::kill::ssh_kill();
                             return ret(&savedmask, P_RESTART);
                         }
