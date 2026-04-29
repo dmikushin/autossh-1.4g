@@ -20,6 +20,7 @@ pub mod globals;
 pub mod grace;
 pub mod kill;
 pub mod lifetime;
+pub mod main_logic;
 pub mod run;
 pub mod signals;
 pub mod stderr_drain;
