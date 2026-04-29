@@ -1043,38 +1043,9 @@ ssh_watch(int sock)
 }
 
 /*
- * Clear any pending signal timer alarm and return the number of seconds
- * before it would have gone off. Return 0 if there was no alarm pending.
+ * clear_alarm_timer() and exceeded_lifetime() — moved to
+ * src/lifetime.rs (Phase 1 port).
  */
-unsigned int 
-clear_alarm_timer(void)
-{
-	unsigned int secs_left = alarm(0);
-	errlog(LOG_DEBUG, 
-	    "clear alarm timer (%d secs left)", secs_left);
-	return secs_left;
-}
-
-/*
- * Checks to see if we have exceeded our time to live
- * Returns 1 if we have, 0 if we haven't
- */
-int
-exceeded_lifetime(void)
-{
-	time_t	now;
-
-	if (max_lifetime > 0 ) {
-		time(&now);
-		if (difftime(now, pid_start_time) >= max_lifetime ) {
-			errlog(LOG_INFO, 
-				"exceeded maximum time to live, shutting down");
-			return 1;
-		}
-	}
-
-	return 0;
-}
 
 /*
  * Wait on child: with options == WNOHANG, poll for
