@@ -13,7 +13,7 @@ TOPDIR  := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
 CFLAGS  := -g -O0 -Wall -Wextra -Wno-unused-parameter \
            -DUNIT_TEST_NO_MAIN \
-           -I$(TOPDIR) -I$(TOPDIR)/tests \
+           -I$(TOPDIR) -I$(TOPDIR)/include -I$(TOPDIR)/tests \
            --coverage
 
 WRAP_SYMS  := kill waitpid sleep alarm time _exit read write getenv poll ppoll
