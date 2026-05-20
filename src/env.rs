@@ -63,7 +63,8 @@ pub unsafe extern "C" fn get_env_args() {
         let s = libc::getenv(c"AUTOSSH_LOGLEVEL".as_ptr());
         if !s.is_null() {
             let (v, t) = parse_l(s);
-            if is_empty_cstr(s) || (!t.is_null() && *t != 0)
+            if is_empty_cstr(s)
+                || (!t.is_null() && *t != 0)
                 || v < libc::LOG_EMERG as c_long
                 || v > libc::LOG_DEBUG as c_long
             {
@@ -89,7 +90,11 @@ pub unsafe extern "C" fn get_env_args() {
     if !s.is_null() {
         let (v, t) = parse_ul(s);
         if is_empty_cstr(s) || v == 0 || (!t.is_null() && *t != 0) {
-            xerrlog!(libc::LOG_ERR, "invalid first poll time \"{}\"", cstr_or(s, ""));
+            xerrlog!(
+                libc::LOG_ERR,
+                "invalid first poll time \"{}\"",
+                cstr_or(s, "")
+            );
         }
         first_poll_time = v as c_int;
         if first_poll_time <= 0 {
@@ -102,9 +107,7 @@ pub unsafe extern "C" fn get_env_args() {
     let s = libc::getenv(c"AUTOSSH_GATETIME".as_ptr());
     if !s.is_null() {
         let (v, t) = parse_l(s);
-        if is_empty_cstr(s) || (v as c_double) < 0.0
-            || (!t.is_null() && *t != 0)
-        {
+        if is_empty_cstr(s) || (v as c_double) < 0.0 || (!t.is_null() && *t != 0) {
             xerrlog!(libc::LOG_ERR, "invalid gate time \"{}\"", cstr_or(s, ""));
         }
         gate_time = v as c_double;
@@ -114,7 +117,11 @@ pub unsafe extern "C" fn get_env_args() {
     if !s.is_null() {
         let (v, t) = parse_l(s);
         if is_empty_cstr(s) || v < -1 || (!t.is_null() && *t != 0) {
-            xerrlog!(libc::LOG_ERR, "invalid max start number \"{}\"", cstr_or(s, ""));
+            xerrlog!(
+                libc::LOG_ERR,
+                "invalid max start number \"{}\"",
+                cstr_or(s, "")
+            );
         }
         max_start = v as c_int;
     }
@@ -125,8 +132,11 @@ pub unsafe extern "C" fn get_env_args() {
             echo_message = s;
         }
         if libc::strlen(echo_message) > MAX_MESSAGE {
-            xerrlog!(libc::LOG_ERR,
-                "echo message may only be {} bytes long", MAX_MESSAGE);
+            xerrlog!(
+                libc::LOG_ERR,
+                "echo message may only be {} bytes long",
+                MAX_MESSAGE
+            );
         }
     }
 
@@ -145,17 +155,22 @@ pub unsafe extern "C" fn get_env_args() {
         if max_lifetime <= 0.0 {
             max_lifetime = 0.0;
         } else {
-            if (poll_time as c_double) > max_lifetime {
-                errlog!(libc::LOG_INFO,
+            let configured_max_lifetime = max_lifetime;
+            if (poll_time as c_double) > configured_max_lifetime {
+                errlog!(
+                    libc::LOG_INFO,
                     "poll time is greater than lifetime, dropping poll time to {:.0}",
-                    max_lifetime);
-                poll_time = max_lifetime as c_int;
+                    configured_max_lifetime
+                );
+                poll_time = configured_max_lifetime as c_int;
             }
-            if (first_poll_time as c_double) > max_lifetime {
-                errlog!(libc::LOG_INFO,
+            if (first_poll_time as c_double) > configured_max_lifetime {
+                errlog!(
+                    libc::LOG_INFO,
                     "first poll time is greater than lifetime, dropping first poll time to {:.0}",
-                    max_lifetime);
-                first_poll_time = max_lifetime as c_int;
+                    configured_max_lifetime
+                );
+                first_poll_time = configured_max_lifetime as c_int;
             }
             libc::time(&raw mut pid_start_time);
         }
@@ -165,7 +180,11 @@ pub unsafe extern "C" fn get_env_args() {
     if !s.is_null() {
         let (v, t) = parse_ul(s);
         if is_empty_cstr(s) || (!t.is_null() && *t != 0) {
-            xerrlog!(libc::LOG_ERR, "invalid max session time \"{}\"", cstr_or(s, ""));
+            xerrlog!(
+                libc::LOG_ERR,
+                "invalid max session time \"{}\"",
+                cstr_or(s, "")
+            );
         }
         max_session = v as c_double;
     }

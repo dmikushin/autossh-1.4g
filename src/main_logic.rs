@@ -3,11 +3,7 @@
 //! autossh.c keeps a tiny `int main()` that just delegates here.
 //! Everything between getopt and the start of ssh_run() is Rust.
 
-use libc::{
-    c_char, c_int, c_long, c_short, c_uint, time_t, FD_CLOEXEC, FILE,
-    F_SETFD, LOG_PID, LOG_USER,
-};
-use std::ffi::CStr;
+use libc::{c_char, c_int, c_uint, FD_CLOEXEC, FILE, F_SETFD, LOG_PID, LOG_USER};
 use std::ptr;
 
 const OPTION_STRING: &[u8] =
@@ -16,11 +12,9 @@ const VER: &str = "1.5.3";
 const NO_RD_SOCK: c_int = -2;
 const L_SYSLOG: c_int = 0x02;
 const P_EXITERR: c_int = 3;
-const MAX_MESSAGE: usize = 64;
 
 extern "C" {
     static __progname: *const c_char;
-    static stderr: *mut FILE;
     static stdout: *mut FILE;
 
     // POSIX getopt globals — not exposed by libc 0.2 on Linux.
@@ -47,8 +41,11 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     opterr = 1;
 
     loop {
-        let ch = libc::getopt(argc, argv as *const *mut c_char,
-            OPTION_STRING.as_ptr() as *const c_char);
+        let ch = libc::getopt(
+            argc,
+            argv as *const *mut c_char,
+            OPTION_STRING.as_ptr() as *const c_char,
+        );
         if ch == -1 {
             break;
         }
@@ -65,8 +62,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
                     __progname
                 };
                 let ver_cstr = std::ffi::CString::new(VER).unwrap();
-                fprintf(stdout, c"%s %s\n".as_ptr(),
-                    progname, ver_cstr.as_ptr());
+                fprintf(stdout, c"%s %s\n".as_ptr(), progname, ver_cstr.as_ptr());
                 libc::exit(0);
             }
             'f' => runasdaemon = 1,
@@ -101,7 +97,11 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         let mut end: *mut c_char = ptr::null_mut();
         ep = libc::strtoul(echop, &mut end, 0) as c_uint;
         if *echop == 0 || (!end.is_null() && *end != 0) || ep == 0 {
-            xerrlog!(libc::LOG_ERR, "invalid echo port  \"{}\"", cstr_or(echop, ""));
+            xerrlog!(
+                libc::LOG_ERR,
+                "invalid echo port  \"{}\"",
+                cstr_or(echop, "")
+            );
         }
     }
 
@@ -113,8 +113,8 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     }
 
     // 4. Validate write port; compute read port; build forwarding strings.
-    let mut wp: c_int;
-    let mut rp: c_int = 0;
+    let wp: c_int;
+    let rp: c_int;
     let mut wmbuf = [0u8; 256];
     let mut rmbuf = [0u8; 256];
     {
@@ -131,14 +131,21 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         xerrlog!(libc::LOG_ERR, "monitor port ({}) out of range", wp);
     } else {
         rp = wp + 1;
-        libc::snprintf(readp.as_mut_ptr() as *mut c_char,
-            readp.len(), c"%d".as_ptr(), rp);
+        libc::snprintf(
+            ptr::addr_of_mut!(readp).cast::<c_char>(),
+            16,
+            c"%d".as_ptr(),
+            rp,
+        );
         let echo_port = if !echop.is_null() { ep as c_int } else { wp };
         let n = libc::snprintf(
             wmbuf.as_mut_ptr() as *mut c_char,
             wmbuf.len(),
             c"%d:%s:%d".as_ptr(),
-            wp, mhost, echo_port);
+            wp,
+            mhost,
+            echo_port,
+        );
         if n as usize > wmbuf.len() {
             xerrlog!(libc::LOG_ERR, "overflow building forwarding string");
         }
@@ -147,7 +154,10 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
                 rmbuf.as_mut_ptr() as *mut c_char,
                 rmbuf.len(),
                 c"%d:%s:%d".as_ptr(),
-                wp, mhost, rp);
+                wp,
+                mhost,
+                rp,
+            );
             if n as usize > rmbuf.len() {
                 xerrlog!(libc::LOG_ERR, "overflow building forwarding string");
             }
@@ -157,7 +167,12 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     // 5. Adjust net_timeout if poll_time is short.
     if (poll_time * 1000) / 2 < net_timeout {
         net_timeout = (poll_time * 1000) / 2;
-        errlog!(libc::LOG_INFO, "short poll time: adjusting net timeouts to {}", net_timeout);
+        let adjusted_net_timeout = net_timeout;
+        errlog!(
+            libc::LOG_INFO,
+            "short poll time: adjusting net timeouts to {}",
+            adjusted_net_timeout
+        );
     }
 
     // 6. Build new argv list, skipping -f / -M and inserting -L/-R.
@@ -226,7 +241,7 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
     let mut sock: c_int = -1;
     if !writep.is_null() {
         if echop.is_null() {
-            sock = crate::conn::conn_listen(mhost, readp.as_ptr());
+            sock = crate::conn::conn_listen(mhost, ptr::addr_of!(readp).cast::<c_char>());
             libc::fcntl(sock, F_SETFD, FD_CLOEXEC);
         } else {
             sock = NO_RD_SOCK;
@@ -243,11 +258,15 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         }
         pid_file_created = 1;
         libc::atexit(unlink_pid_atexit);
-        if fprintf(pid_file, c"%d\n".as_ptr(),
-                   libc::getpid() as c_int) == 0 {
+        if fprintf(pid_file, c"%d\n".as_ptr(), libc::getpid() as c_int) == 0 {
             let path = cstr_or(pid_file_name, "");
             let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
-            xerrlog!(libc::LOG_ERR, "write failed to pid file \"{}\": {}", path, err);
+            xerrlog!(
+                libc::LOG_ERR,
+                "write failed to pid file \"{}\": {}",
+                path,
+                err
+            );
         }
         libc::fflush(pid_file);
         libc::fclose(pid_file);
@@ -264,18 +283,15 @@ pub unsafe extern "C" fn autossh_main(argc: c_int, argv: *mut *mut c_char) -> c_
         libc::closelog();
     }
 
-    if retval == P_EXITERR { 1 } else { 0 }
+    if retval == P_EXITERR {
+        1
+    } else {
+        0
+    }
 }
 
 extern "C" fn unlink_pid_atexit() {
-    unsafe { crate::util::unlink_pid_file(); }
-}
-
-// Suppress unused if any.
-#[allow(dead_code)]
-fn _unused() {
-    let _: Option<&CStr> = None;
-    let _: c_long = 0;
-    let _: c_short = 0;
-    let _: time_t = 0;
+    unsafe {
+        crate::util::unlink_pid_file();
+    }
 }

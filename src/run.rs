@@ -13,15 +13,12 @@
 //! (test_watchdog_silence, test_port_fwd_fail, test_max_lifetime,
 //! …) which exercise the full fork+exec path against mock_ssh.sh.
 
-use libc::{
-    c_char, c_int, fcntl, F_GETFL, F_SETFL, O_NONBLOCK, STDERR_FILENO,
-    SIGTERM, time_t,
-};
+use libc::{c_char, c_int, fcntl, time_t, F_GETFL, F_SETFL, O_NONBLOCK, SIGTERM, STDERR_FILENO};
 
 use crate::log::cstr_or;
 use crate::{errlog, xerrlog};
 
-const P_EXITOK:  c_int = 2;
+const P_EXITOK: c_int = 2;
 const P_EXITERR: c_int = 3;
 
 extern "C" {
@@ -46,10 +43,7 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
     let mut tv: libc::timeval = std::mem::zeroed();
     libc::gettimeofday(&mut tv, std::ptr::null_mut());
     let pid = libc::getpid() as libc::c_uint;
-    srandom(
-        (pid ^ tv.tv_usec as libc::c_uint ^ tv.tv_sec as libc::c_uint)
-            as libc::c_uint,
-    );
+    srandom((pid ^ tv.tv_usec as libc::c_uint ^ tv.tv_sec as libc::c_uint) as libc::c_uint);
 
     crate::signals::set_exit_sig_handler();
 
@@ -78,11 +72,21 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
         // connect.
         last_stderr_time = 0;
 
-        if max_start < 0 {
-            errlog!(libc::LOG_INFO, "starting ssh (count {})", start_count);
+        let current_start_count = start_count;
+        let configured_max_start = max_start;
+        if configured_max_start < 0 {
+            errlog!(
+                libc::LOG_INFO,
+                "starting ssh (count {})",
+                current_start_count
+            );
         } else {
-            errlog!(libc::LOG_INFO,
-                "starting ssh (count {} of {})", start_count, max_start);
+            errlog!(
+                libc::LOG_INFO,
+                "starting ssh (count {} of {})",
+                current_start_count,
+                configured_max_start
+            );
         }
 
         // Pipe for capturing SSH stderr.
@@ -120,8 +124,12 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
             }
             -1 => {
                 cchild = 0;
-                if stderr_pipe[0] >= 0 { libc::close(stderr_pipe[0]); }
-                if stderr_pipe[1] >= 0 { libc::close(stderr_pipe[1]); }
+                if stderr_pipe[0] >= 0 {
+                    libc::close(stderr_pipe[0]);
+                }
+                if stderr_pipe[1] >= 0 {
+                    libc::close(stderr_pipe[1]);
+                }
                 let err = cstr_or(libc::strerror(*libc::__errno_location()), "?");
                 xerrlog!(libc::LOG_ERR, "fork: {}", err);
             }
@@ -136,7 +144,8 @@ pub unsafe extern "C" fn ssh_run(sock: c_int, av: *mut *mut c_char) -> c_int {
                         fcntl(ssh_stderr_fd, F_SETFL, flags | O_NONBLOCK);
                     }
                 }
-                errlog!(libc::LOG_INFO, "ssh child pid is {}", cchild);
+                let child = cchild;
+                errlog!(libc::LOG_INFO, "ssh child pid is {}", child);
 
                 crate::signals::set_sig_handlers();
                 let retval = crate::watch::ssh_watch(sock);

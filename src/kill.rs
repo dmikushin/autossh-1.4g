@@ -17,7 +17,7 @@ use crate::errlog;
 use crate::log::cstr_or;
 
 const SIGTERM_GRACE: c_int = 2;
-const SIGKILL_WAIT:  c_int = 2;
+const SIGKILL_WAIT: c_int = 2;
 
 extern "C" {
     static mut cchild: c_int;
@@ -44,29 +44,30 @@ pub unsafe extern "C" fn ssh_kill() {
     }
 
     // SIGTERM didn't work, escalate to SIGKILL.
-    errlog!(libc::LOG_WARNING,
+    let child = cchild;
+    errlog!(
+        libc::LOG_WARNING,
         "ssh child {} did not exit after {} seconds, sending SIGKILL",
-        cchild, SIGTERM_GRACE);
+        child,
+        SIGTERM_GRACE
+    );
     libc::kill(cchild, libc::SIGKILL);
 
     if reap_with_grace(SIGKILL_WAIT, &mut status, true) {
         return;
     }
 
+    let child = cchild;
     errlog!(libc::LOG_ERR,
         "ssh child {} not dead after SIGKILL + {} seconds (likely in uninterruptible state); abandoning",
-        cchild, SIGKILL_WAIT);
+        child, SIGKILL_WAIT);
     cchild = 0;
 }
 
 /// Helper: WNOHANG-poll up to `seconds`, sleeping 1s between attempts.
 /// Returns true if `cchild` was reaped (or already gone) and we
 /// should stop. `after_sigkill` chooses the error message variant.
-unsafe fn reap_with_grace(
-    seconds: c_int,
-    status: &mut c_int,
-    after_sigkill: bool,
-) -> bool {
+unsafe fn reap_with_grace(seconds: c_int, status: &mut c_int, after_sigkill: bool) -> bool {
     let mut waited: c_int = 0;
     while waited < seconds {
         let errno_ptr = libc::__errno_location();
