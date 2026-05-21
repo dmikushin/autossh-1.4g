@@ -36,6 +36,7 @@ TEST(new_state_and_accessors)
     cfg.target_port = 2222;
     cfg.bind_host = "127.0.0.1";
     cfg.local_port = 43210;
+    cfg.monitor_host = "172.17.0.1";
     cfg.flags = AUTOSSH_SESSION_MONITOR_DISABLED;
 
     autossh_session *session = autossh_session_new(&cfg);

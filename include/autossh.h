@@ -39,6 +39,8 @@ typedef struct autossh_session_config {
     const char *bind_host;
     /* 0 asks libautossh to choose an ephemeral local port. */
     uint16_t local_port;
+    /* Host/interface used by autossh's monitor loop. NULL keeps autossh default. */
+    const char *monitor_host;
     /* 0 asks libautossh to choose monitor ports unless monitoring is disabled. */
     uint16_t monitor_port;
     uint32_t flags;

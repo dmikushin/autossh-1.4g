@@ -24,6 +24,7 @@ const DEFAULT_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_TARGET_PORT: u16 = 22;
 const DEFAULT_START_TIMEOUT_MS: c_int = 15000;
 const ENV_AUTOSSH_PATH: &[u8] = b"AUTOSSH_PATH\0";
+const ENV_AUTOSSH_MHOST: &[u8] = b"AUTOSSH_MHOST\0";
 const ENV_AUTOSSH_POLL: &[u8] = b"AUTOSSH_POLL\0";
 const ENV_AUTOSSH_FIRST_POLL: &[u8] = b"AUTOSSH_FIRST_POLL\0";
 const ENV_AUTOSSH_GATETIME: &[u8] = b"AUTOSSH_GATETIME\0";
@@ -41,6 +42,7 @@ pub struct autossh_session_config {
 
     pub bind_host: *const c_char,
     pub local_port: u16,
+    pub monitor_host: *const c_char,
     pub monitor_port: u16,
     pub flags: u32,
 
@@ -62,6 +64,7 @@ struct SessionConfig {
     target_port: u16,
     bind_host: CString,
     local_port: u16,
+    monitor_host: Option<CString>,
     monitor_port: u16,
     monitor_disabled: bool,
     poll_time: c_int,
@@ -136,6 +139,7 @@ unsafe fn parse_config(config: *const autossh_session_config) -> Result<SessionC
     let target_host = required_cstring(c.target_host, "target_host")?;
     let bind_host = optional_cstring(c.bind_host, "bind_host")?
         .unwrap_or_else(|| CString::new(DEFAULT_BIND_HOST).unwrap());
+    let monitor_host = optional_cstring(c.monitor_host, "monitor_host")?;
     let ssh_path = optional_cstring(c.ssh_path, "ssh_path")?;
 
     let mut extra_ssh_args = Vec::new();
@@ -160,6 +164,7 @@ unsafe fn parse_config(config: *const autossh_session_config) -> Result<SessionC
         },
         bind_host,
         local_port: c.local_port,
+        monitor_host,
         monitor_port: c.monitor_port,
         monitor_disabled: (c.flags & AUTOSSH_SESSION_MONITOR_DISABLED) != 0,
         poll_time: c.poll_time,
@@ -288,6 +293,13 @@ fn build_child_argv(config: &SessionConfig) -> Result<Vec<CString>, String> {
 unsafe fn child_main(session: &autossh_session) -> ! {
     if let Some(path) = &session.config.ssh_path {
         libc::setenv(ENV_AUTOSSH_PATH.as_ptr() as *const c_char, path.as_ptr(), 1);
+    }
+    if let Some(host) = &session.config.monitor_host {
+        libc::setenv(
+            ENV_AUTOSSH_MHOST.as_ptr() as *const c_char,
+            host.as_ptr(),
+            1,
+        );
     }
     if session.config.poll_time > 0 {
         let s = CString::new(session.config.poll_time.to_string()).unwrap();
@@ -511,6 +523,7 @@ mod tests {
             target_port: 1234,
             bind_host: std::ptr::dangling(),
             local_port: 1234,
+            monitor_host: std::ptr::dangling(),
             monitor_port: 1234,
             flags: 1234,
             poll_time: 1234,
@@ -535,6 +548,7 @@ mod tests {
         assert_eq!(cfg.target_port, DEFAULT_TARGET_PORT);
         assert!(cfg.bind_host.is_null());
         assert_eq!(cfg.local_port, 0);
+        assert!(cfg.monitor_host.is_null());
         assert_eq!(cfg.monitor_port, 0);
         assert_eq!(cfg.flags, 0);
         assert_eq!(cfg.max_start, -1);
@@ -552,6 +566,7 @@ mod tests {
             target_port: 22,
             bind_host: ptr::null(),
             local_port: 0,
+            monitor_host: ptr::null(),
             monitor_port: 0,
             flags: 0,
             poll_time: 0,
@@ -575,6 +590,7 @@ mod tests {
     fn parse_config_applies_defaults_and_extra_args() {
         let destination = cstr("jump");
         let target = cstr("final");
+        let monitor_host = cstr("172.17.0.1");
         let extra = [cstr("-F"), cstr("/tmp/ssh_config")];
         let extra_ptrs = [extra[0].as_ptr(), extra[1].as_ptr()];
         let cfg = autossh_session_config {
@@ -585,6 +601,7 @@ mod tests {
             target_port: 0,
             bind_host: ptr::null(),
             local_port: 0,
+            monitor_host: monitor_host.as_ptr(),
             monitor_port: 0,
             flags: AUTOSSH_SESSION_MONITOR_DISABLED,
             poll_time: 0,
@@ -602,6 +619,7 @@ mod tests {
         assert_eq!(parsed.target_port, DEFAULT_TARGET_PORT);
         assert_eq!(parsed.bind_host.to_str().unwrap(), DEFAULT_BIND_HOST);
         assert_eq!(parsed.start_timeout_ms, DEFAULT_START_TIMEOUT_MS);
+        assert_eq!(parsed.monitor_host.unwrap().to_str().unwrap(), "172.17.0.1");
         assert!(parsed.monitor_disabled);
         assert_eq!(parsed.extra_ssh_args.len(), 2);
     }
@@ -615,6 +633,7 @@ mod tests {
             target_port: 22,
             bind_host: cstr("127.0.0.1"),
             local_port: 43000,
+            monitor_host: Some(cstr("172.17.0.1")),
             monitor_port: 0,
             monitor_disabled: true,
             poll_time: 0,
