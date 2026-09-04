@@ -9,6 +9,7 @@ use libc::{c_char, c_double, c_int, pid_t};
 use std::ffi::{CStr, CString};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::ptr;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 const AUTOSSH_SESSION_MONITOR_DISABLED: u32 = 1u32 << 0;
@@ -79,9 +80,29 @@ struct SessionConfig {
 #[repr(C)]
 pub struct autossh_session {
     config: SessionConfig,
-    pid: pid_t,
+    /// The supervisor's pid, or 0. Atomic, and handed over by `swap`, because
+    /// `autossh_session_stop` and `autossh_session_state` are called from
+    /// different threads of the embedding process (ssh2ng under Bun: a poll
+    /// on one thread, a close on another) and both reap the child. Stop's
+    /// loop re-read the field while state's poll had already reaped and
+    /// zeroed it, and after its five-second grace it ran
+    /// `kill(session.pid, SIGKILL)` with pid 0 — which is the caller's whole
+    /// process group. That took a test runner and its shell down with it.
+    /// Every kill in this file now goes through `kill_pid`, which refuses a
+    /// pid that is not a single positive process.
+    pid: AtomicI32,
     state: c_int,
     last_error: CString,
+}
+
+/// `kill(2)` restricted to one live, positive pid. `pid == 0` is the caller's
+/// process group, `-1` is every process the caller may signal, and a negative
+/// pid is a group: none of those is ever what a supervisor teardown means.
+fn kill_pid(pid: pid_t, signal: c_int) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    unsafe { libc::kill(pid, signal) == 0 }
 }
 
 #[no_mangle]
@@ -235,7 +256,7 @@ fn wait_for_listener(session: &autossh_session) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_millis(session.config.start_timeout_ms as u64);
 
     while Instant::now() < deadline {
-        if let Some(status) = child_exited(session.pid) {
+        if let Some(status) = child_exited(session.pid.load(Ordering::SeqCst)) {
             return Err(format!(
                 "autossh supervisor exited early with status {status}"
             ));
@@ -360,7 +381,7 @@ pub unsafe extern "C" fn autossh_session_new(
     };
     Box::into_raw(Box::new(autossh_session {
         config,
-        pid: 0,
+        pid: AtomicI32::new(0),
         state: AUTOSSH_STATE_INIT,
         last_error: CString::new("").unwrap(),
     }))
@@ -372,7 +393,7 @@ pub unsafe extern "C" fn autossh_session_start(session: *mut autossh_session) ->
         return -1;
     }
     let session = &mut *session;
-    if session.pid > 0 {
+    if session.pid.load(Ordering::SeqCst) > 0 {
         return set_error(session, "session is already started");
     }
 
@@ -402,7 +423,7 @@ pub unsafe extern "C" fn autossh_session_start(session: *mut autossh_session) ->
         child_main(session);
     }
 
-    session.pid = pid;
+    session.pid.store(pid, Ordering::SeqCst);
     match wait_for_listener(session) {
         Ok(()) => {
             session.state = AUTOSSH_STATE_RUNNING;
@@ -422,27 +443,30 @@ pub unsafe extern "C" fn autossh_session_stop(session: *mut autossh_session) -> 
         return -1;
     }
     let session = &mut *session;
-    if session.pid <= 0 {
+    // Take the pid: whoever swaps it out owns the teardown, and a second
+    // caller — or a state poll racing this one — finds 0 and does nothing.
+    let pid = session.pid.swap(0, Ordering::SeqCst);
+    if pid <= 0 {
         session.state = AUTOSSH_STATE_STOPPED;
         return 0;
     }
 
-    libc::kill(session.pid, libc::SIGTERM);
+    kill_pid(pid, libc::SIGTERM);
     for _ in 0..50 {
         let mut status: c_int = 0;
-        let rc = libc::waitpid(session.pid, &mut status, libc::WNOHANG);
-        if rc == session.pid {
-            session.pid = 0;
+        let rc = libc::waitpid(pid, &mut status, libc::WNOHANG);
+        if rc == pid || (rc == -1 && *libc::__errno_location() == libc::ECHILD) {
+            // Reaped here, or already reaped by someone else (ECHILD): either
+            // way the process is gone and there is nothing left to kill.
             session.state = AUTOSSH_STATE_STOPPED;
             return 0;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    libc::kill(session.pid, libc::SIGKILL);
+    kill_pid(pid, libc::SIGKILL);
     let mut status: c_int = 0;
-    libc::waitpid(session.pid, &mut status, 0);
-    session.pid = 0;
+    libc::waitpid(pid, &mut status, 0);
     session.state = AUTOSSH_STATE_STOPPED;
     0
 }
@@ -462,11 +486,13 @@ pub unsafe extern "C" fn autossh_session_state(session: *mut autossh_session) ->
         return AUTOSSH_STATE_ERROR;
     }
     let session = &mut *session;
-    if session.pid > 0 {
-        if child_exited(session.pid).is_some() {
-            session.pid = 0;
-            session.state = AUTOSSH_STATE_EXITED;
-        }
+    let pid = session.pid.load(Ordering::SeqCst);
+    if pid > 0 && child_exited(pid).is_some() {
+        // Only clear the pid we reaped; a concurrent stop may have taken it.
+        let _ = session
+            .pid
+            .compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+        session.state = AUTOSSH_STATE_EXITED;
     }
     session.state
 }
@@ -476,7 +502,7 @@ pub unsafe extern "C" fn autossh_session_pid(session: *mut autossh_session) -> p
     if session.is_null() {
         return 0;
     }
-    (*session).pid
+    (*session).pid.load(Ordering::SeqCst)
 }
 
 #[no_mangle]
@@ -511,6 +537,69 @@ mod tests {
 
     fn cstr(s: &str) -> CString {
         CString::new(s).unwrap()
+    }
+
+    /// The signal that took a test runner down: kill with pid 0 is the
+    /// caller's own process group. `kill_pid` must refuse it, and every
+    /// other non-positive pid, without touching the kernel.
+    #[test]
+    fn kill_pid_refuses_groups_and_zero() {
+        assert!(!kill_pid(0, libc::SIGKILL));
+        assert!(!kill_pid(-1, libc::SIGKILL));
+        assert!(!kill_pid(-(std::process::id() as pid_t), libc::SIGKILL));
+        // Signal 0 is a liveness probe: a positive live pid is accepted.
+        assert!(kill_pid(std::process::id() as pid_t, 0));
+    }
+
+    /// Stop and state, racing on one session whose child is already gone:
+    /// exactly one of them may own the pid, and neither may end up sending
+    /// anything to pid 0. The child is a real forked process that exits at
+    /// once, so waitpid sees it reaped from one side or the other.
+    #[test]
+    fn concurrent_stop_and_state_never_kill_pid_zero() {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        let session = Box::into_raw(Box::new(autossh_session {
+            config: SessionConfig {
+                ssh_path: Some(cstr("/bin/true")),
+                ssh_destination: cstr("nowhere"),
+                target_host: cstr("127.0.0.1"),
+                target_port: 1,
+                bind_host: cstr("127.0.0.1"),
+                local_port: 1,
+                monitor_host: None,
+                monitor_port: 0,
+                monitor_disabled: true,
+                poll_time: 0,
+                first_poll_time: 0,
+                gate_time: 0.0,
+                max_start: 0,
+                max_session: 0.0,
+                start_timeout_ms: 0,
+                extra_ssh_args: Vec::new(),
+            },
+            pid: AtomicI32::new(pid),
+            state: AUTOSSH_STATE_RUNNING,
+            last_error: CString::new("").unwrap(),
+        }));
+        let addr = session as usize;
+        let poller = std::thread::spawn(move || {
+            for _ in 0..200 {
+                unsafe { autossh_session_state(addr as *mut autossh_session) };
+            }
+        });
+        let stopper = std::thread::spawn(move || unsafe {
+            autossh_session_stop(addr as *mut autossh_session)
+        });
+        assert_eq!(stopper.join().unwrap(), 0);
+        poller.join().unwrap();
+        // We are still here — the process group was not signalled — and the
+        // pid is cleared exactly once.
+        assert_eq!(unsafe { autossh_session_pid(session) }, 0);
+        unsafe { autossh_session_free(session) };
     }
 
     #[test]
