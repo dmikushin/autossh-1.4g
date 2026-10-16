@@ -20,7 +20,7 @@ use libc::{c_char, c_int, FILE};
 use std::ffi::CStr;
 
 const L_FILELOG: c_int = 0x01;
-const L_SYSLOG:  c_int = 0x02;
+const L_SYSLOG: c_int = 0x02;
 
 extern "C" {
     static mut logtype: c_int;
@@ -58,8 +58,14 @@ pub unsafe extern "C" fn errlog_str(level: c_int, msg: *const c_char) {
         let ts = crate::util::timestr() as *const c_char;
         // Use libc::fprintf with %s for the pre-formatted msg —
         // we only need the variadic CALL, not a definition.
-        libc::fprintf(fl, c"%s %s[%d]: %s\n".as_ptr(),
-            ts, progname, libc::getpid() as c_int, msg);
+        libc::fprintf(
+            fl,
+            c"%s %s[%d]: %s\n".as_ptr(),
+            ts,
+            progname,
+            libc::getpid() as c_int,
+            msg,
+        );
         libc::fflush(fl);
     }
 }
@@ -80,7 +86,9 @@ pub unsafe extern "C" fn xerrlog_str(level: c_int, msg: *const c_char) -> ! {
 pub fn _log_with(level: c_int, args: std::fmt::Arguments<'_>) {
     let s = std::fmt::format(args);
     if let Ok(cs) = std::ffi::CString::new(s) {
-        unsafe { errlog_str(level, cs.as_ptr()); }
+        unsafe {
+            errlog_str(level, cs.as_ptr());
+        }
     }
 }
 

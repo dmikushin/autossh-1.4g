@@ -51,9 +51,11 @@ pub unsafe extern "C" fn grace_time(last_start: time_t) {
     }
 
     if port_fwd_failed != 0 {
-        errlog!(libc::LOG_INFO,
+        errlog!(
+            libc::LOG_INFO,
             "port forwarding failed on previous attempt, enforcing minimum {} second delay",
-            PORT_FWD_FAIL_DELAY);
+            PORT_FWD_FAIL_DELAY
+        );
         libc::sleep(PORT_FWD_FAIL_DELAY);
         port_fwd_failed = 0;
     }

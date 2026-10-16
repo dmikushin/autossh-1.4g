@@ -22,9 +22,9 @@ use crate::errlog;
 use crate::log::cstr_or;
 
 const P_CONTINUE: c_int = 0;
-const P_RESTART:  c_int = 1;
-const P_EXITOK:   c_int = 2;
-const P_EXITERR:  c_int = 3;
+const P_RESTART: c_int = 1;
+const P_EXITOK: c_int = 2;
+const P_EXITERR: c_int = 3;
 
 extern "C" {
     static mut cchild: c_int;
@@ -49,7 +49,11 @@ pub unsafe extern "C" fn ssh_wait(options: c_int) -> c_int {
 
     if libc::WIFSIGNALED(status) {
         let sig = libc::WTERMSIG(status);
-        errlog!(libc::LOG_INFO, "ssh exited on signal {}, restarting ssh", sig);
+        errlog!(
+            libc::LOG_INFO,
+            "ssh exited on signal {}, restarting ssh",
+            sig
+        );
         return P_RESTART;
     }
 
@@ -61,38 +65,59 @@ pub unsafe extern "C" fn ssh_wait(options: c_int) -> c_int {
             let mut now: time_t = 0;
             libc::time(&raw mut now);
             if libc::difftime(now, start_time) <= gate_time {
-                errlog!(libc::LOG_ERR,
+                errlog!(
+                    libc::LOG_ERR,
                     "ssh exited prematurely with status {}; {} exiting",
-                    evalue, progname);
+                    evalue,
+                    progname
+                );
                 return P_EXITERR;
             }
         }
 
         match evalue {
             255 => {
-                errlog!(libc::LOG_INFO,
-                    "ssh exited with error status {}; restarting ssh", evalue);
+                errlog!(
+                    libc::LOG_INFO,
+                    "ssh exited with error status {}; restarting ssh",
+                    evalue
+                );
                 P_RESTART
             }
             0 => {
-                errlog!(libc::LOG_INFO,
-                    "ssh exited with status {}; {} exiting", evalue, progname);
+                errlog!(
+                    libc::LOG_INFO,
+                    "ssh exited with status {}; {} exiting",
+                    evalue,
+                    progname
+                );
                 P_EXITOK
             }
             1 | 2 => {
                 if start_count > 1 || gate_time == 0.0 {
-                    errlog!(libc::LOG_INFO,
-                        "ssh exited with error status {}; restarting ssh", evalue);
+                    errlog!(
+                        libc::LOG_INFO,
+                        "ssh exited with error status {}; restarting ssh",
+                        evalue
+                    );
                     P_RESTART
                 } else {
-                    errlog!(libc::LOG_INFO,
-                        "ssh exited with status {}; {} exiting", evalue, progname);
+                    errlog!(
+                        libc::LOG_INFO,
+                        "ssh exited with status {}; {} exiting",
+                        evalue,
+                        progname
+                    );
                     P_EXITERR
                 }
             }
             _ => {
-                errlog!(libc::LOG_INFO,
-                    "ssh exited with status {}; {} exiting", evalue, progname);
+                errlog!(
+                    libc::LOG_INFO,
+                    "ssh exited with status {}; {} exiting",
+                    evalue,
+                    progname
+                );
                 P_EXITERR
             }
         }

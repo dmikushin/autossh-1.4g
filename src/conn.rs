@@ -7,12 +7,10 @@
 #![allow(unused_assignments)]
 
 use libc::{
-    c_char, c_int, c_long, c_void, accept, addrinfo, bind,
-    close, connect, freeaddrinfo, getaddrinfo, gai_strerror, getpid, listen,
-    nfds_t, pollfd, read, setsockopt, shutdown, size_t, sockaddr, socket,
-    socklen_t, ssize_t, strerror, write, AF_INET, AI_PASSIVE, EAGAIN, EINTR,
-    IPPROTO_TCP, POLLIN, POLLOUT, SHUT_RDWR, SOCK_STREAM, SOL_SOCKET,
-    SO_REUSEADDR,
+    accept, addrinfo, bind, c_char, c_int, c_long, c_void, close, connect, freeaddrinfo,
+    gai_strerror, getaddrinfo, getpid, listen, nfds_t, pollfd, read, setsockopt, shutdown, size_t,
+    sockaddr, socket, socklen_t, ssize_t, strerror, write, AF_INET, AI_PASSIVE, EAGAIN, EINTR,
+    IPPROTO_TCP, POLLIN, POLLOUT, SHUT_RDWR, SOCK_STREAM, SOL_SOCKET, SO_REUSEADDR,
 };
 use std::ptr;
 
@@ -55,10 +53,7 @@ unsafe fn conn_addr(host: *const c_char, port: *const c_char) -> *mut addrinfo {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn conn_remote(
-    host: *const c_char,
-    port: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn conn_remote(host: *const c_char, port: *const c_char) -> c_int {
     static mut RES: *mut addrinfo = ptr::null_mut();
     if RES.is_null() {
         RES = conn_addr(host, port);
@@ -82,10 +77,7 @@ pub unsafe extern "C" fn conn_remote(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn conn_listen(
-    host: *const c_char,
-    port: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn conn_listen(host: *const c_char, port: *const c_char) -> c_int {
     let res_ptr = conn_addr(host, port);
     let res = &*res_ptr;
 
@@ -96,10 +88,13 @@ pub unsafe extern "C" fn conn_listen(
 
     let on: c_int = 1;
     if setsockopt(
-        sock, SOL_SOCKET, SO_REUSEADDR,
+        sock,
+        SOL_SOCKET,
+        SO_REUSEADDR,
         &on as *const _ as *const c_void,
         std::mem::size_of::<c_int>() as socklen_t,
-    ) != 0 {
+    ) != 0
+    {
         xerrlog!(libc::LOG_ERR, "setsockopt: {}", errno_str());
     }
 
@@ -119,10 +114,7 @@ pub unsafe extern "C" fn conn_listen(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn conn_poll_for_accept(
-    sock: c_int,
-    pfd: *mut pollfd,
-) -> c_int {
+pub unsafe extern "C" fn conn_poll_for_accept(sock: c_int, pfd: *mut pollfd) -> c_int {
     let pfds = std::slice::from_raw_parts_mut(pfd, 1);
     pfds[0].fd = sock;
     pfds[0].events = POLLIN;
@@ -131,13 +123,15 @@ pub unsafe extern "C" fn conn_poll_for_accept(
     loop {
         match libc::poll(pfd, 1, timeo_polla) {
             0 => {
-                errlog!(libc::LOG_INFO,
-                    "timeout polling to accept read connection");
+                errlog!(libc::LOG_INFO, "timeout polling to accept read connection");
                 return -1;
             }
             -1 => {
-                errlog!(libc::LOG_ERR,
-                    "error polling to accept read connection: {}", errno_str());
+                errlog!(
+                    libc::LOG_ERR,
+                    "error polling to accept read connection: {}",
+                    errno_str()
+                );
                 return -1;
             }
             _ => {}
@@ -147,8 +141,11 @@ pub unsafe extern "C" fn conn_poll_for_accept(
             let mut len: socklen_t = std::mem::size_of::<sockaddr>() as socklen_t;
             let rd = accept(sock, &mut cliaddr, &mut len);
             if rd == -1 {
-                errlog!(libc::LOG_ERR,
-                    "error accepting read connection: {}", errno_str());
+                errlog!(
+                    libc::LOG_ERR,
+                    "error accepting read connection: {}",
+                    errno_str()
+                );
                 return -1;
             }
             return rd;
@@ -171,11 +168,7 @@ pub unsafe extern "C" fn conn_send_and_receive(
     let mut rp_cur = rp;
     let mut wp_cur = wp;
 
-    let (ird, iwr): (usize, usize) = if ntopoll == 2 {
-        (0, 1)
-    } else {
-        (0, 0)
-    };
+    let (ird, iwr): (usize, usize) = if ntopoll == 2 { (0, 1) } else { (0, 0) };
 
     let pfds = std::slice::from_raw_parts_mut(pfd, ntopoll as usize);
     let mut ntopoll = ntopoll;
@@ -190,8 +183,7 @@ pub unsafe extern "C" fn conn_send_and_receive(
 
         if wleft > 0 && (pfds[iwr].revents & POLLOUT) != 0 {
             while wleft > 0 {
-                let nwrite: ssize_t =
-                    write(pfds[iwr].fd, wp_cur as *const c_void, wleft);
+                let nwrite: ssize_t = write(pfds[iwr].fd, wp_cur as *const c_void, wleft);
                 if nwrite == 0 {
                     wleft = 0;
                     break;
@@ -213,12 +205,9 @@ pub unsafe extern "C" fn conn_send_and_receive(
             }
         }
 
-        if (pfds[ird].revents & POLLIN) != 0
-            || (pfds[ird].revents & libc::POLLHUP) != 0
-        {
+        if (pfds[ird].revents & POLLIN) != 0 || (pfds[ird].revents & libc::POLLHUP) != 0 {
             while rleft > 0 {
-                let nread: ssize_t =
-                    read(pfds[ird].fd, rp_cur as *mut c_void, rleft);
+                let nread: ssize_t = read(pfds[ird].fd, rp_cur as *mut c_void, rleft);
                 if nread == 0 {
                     rleft = 0;
                     break;
@@ -267,8 +256,16 @@ pub unsafe extern "C" fn conn_test(
     }
 
     let mut pfd: [pollfd; 2] = [
-        pollfd { fd: -1, events: 0, revents: 0 },
-        pollfd { fd: wd, events: POLLOUT, revents: 0 },
+        pollfd {
+            fd: -1,
+            events: 0,
+            revents: 0,
+        },
+        pollfd {
+            fd: wd,
+            events: POLLOUT,
+            revents: 0,
+        },
     ];
 
     const BUF_SZ: usize = 64 + 65 + MAX_MESSAGE;
@@ -277,7 +274,11 @@ pub unsafe extern "C" fn conn_test(
 
     while tries < MAX_CONN_TRIES {
         if tries + 1 >= MAX_CONN_TRIES {
-            errlog!(libc::LOG_DEBUG, "tried connection {} times and failed", tries + 1);
+            errlog!(
+                libc::LOG_DEBUG,
+                "tried connection {} times and failed",
+                tries + 1
+            );
             tries += 1;
             break;
         }
@@ -298,8 +299,12 @@ pub unsafe extern "C" fn conn_test(
             wbuf.as_mut_ptr() as *mut c_char,
             BUF_SZ,
             c"%s %s %d %ld %s\r\n".as_ptr(),
-            nodename_ptr, progname,
-            getpid() as c_int, id, echo_message);
+            nodename_ptr,
+            progname,
+            getpid() as c_int,
+            id,
+            echo_message,
+        );
         if n as usize >= BUF_SZ {
             xerrlog!(libc::LOG_ERR, "conn_test: buffer overflow");
         }
@@ -330,8 +335,11 @@ pub unsafe extern "C" fn conn_test(
         );
 
         if send_error == 0 {
-            if libc::strcmp(rbuf.as_ptr() as *const c_char,
-                            wbuf.as_ptr() as *const c_char) == 0 {
+            if libc::strcmp(
+                rbuf.as_ptr() as *const c_char,
+                wbuf.as_ptr() as *const c_char,
+            ) == 0
+            {
                 errlog!(libc::LOG_DEBUG, "connection ok");
                 rval = 1;
                 tries += 1;
@@ -342,7 +350,10 @@ pub unsafe extern "C" fn conn_test(
                 errlog!(libc::LOG_DEBUG, "not what I sent: \"{}\" : \"{}\"", w, r);
             }
         } else if send_error == 1 {
-            errlog!(libc::LOG_DEBUG, "timeout on io poll, looping to accept again");
+            errlog!(
+                libc::LOG_DEBUG,
+                "timeout on io poll, looping to accept again"
+            );
         } else {
             errlog!(libc::LOG_DEBUG, "error on poll: {}", errno_str());
             tries += 1;

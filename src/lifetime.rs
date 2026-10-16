@@ -25,8 +25,10 @@ pub unsafe extern "C" fn exceeded_lifetime() -> c_int {
         let mut now: time_t = 0;
         libc::time(&mut now);
         if libc::difftime(now, pid_start_time) >= max_lifetime {
-            errlog!(libc::LOG_INFO,
-                "exceeded maximum time to live, shutting down");
+            errlog!(
+                libc::LOG_INFO,
+                "exceeded maximum time to live, shutting down"
+            );
             return 1;
         }
     }

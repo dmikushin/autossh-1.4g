@@ -20,7 +20,7 @@
 //! recvmsg(2). poll/select are NOT hooked: they're allowed to
 //! block by design.
 
-use libc::{c_char, c_int, c_void, sockaddr, socklen_t, ssize_t, size_t};
+use libc::{c_char, c_int, c_void, size_t, sockaddr, socklen_t, ssize_t};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::Once;
 
@@ -61,15 +61,13 @@ impl Tracker {
     }
 }
 
-static CONNECT_T:     Tracker = Tracker::new("connect");
+static CONNECT_T: Tracker = Tracker::new("connect");
 static GETADDRINFO_T: Tracker = Tracker::new("getaddrinfo");
-static RECV_T:        Tracker = Tracker::new("recv");
-static RECVFROM_T:    Tracker = Tracker::new("recvfrom");
-static RECVMSG_T:     Tracker = Tracker::new("recvmsg");
+static RECV_T: Tracker = Tracker::new("recv");
+static RECVFROM_T: Tracker = Tracker::new("recvfrom");
+static RECVMSG_T: Tracker = Tracker::new("recvmsg");
 
-const TRACKERS: &[&Tracker] = &[
-    &CONNECT_T, &GETADDRINFO_T, &RECV_T, &RECVFROM_T, &RECVMSG_T,
-];
+const TRACKERS: &[&Tracker] = &[&CONNECT_T, &GETADDRINFO_T, &RECV_T, &RECVFROM_T, &RECVMSG_T];
 
 static MONITOR_STARTED: Once = Once::new();
 static THRESHOLD_SECS: AtomicI64 = AtomicI64::new(DEFAULT_THRESHOLD_SECS);
@@ -77,7 +75,9 @@ static IN_INTERCEPTOR: AtomicBool = AtomicBool::new(false);
 
 fn now_secs() -> i64 {
     let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts); }
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+    }
     ts.tv_sec as i64
 }
 
@@ -99,14 +99,20 @@ unsafe fn read_threshold() {
 /// eventually self-terminates the process if we're truly stuck.
 extern "C" fn monitor_main(_: *mut c_void) -> *mut c_void {
     loop {
-        unsafe { libc::sleep(1); }
+        unsafe {
+            libc::sleep(1);
+        }
         let now = now_secs();
         let threshold = THRESHOLD_SECS.load(Ordering::Relaxed);
         for t in TRACKERS {
             let start = t.start_sec.load(Ordering::Relaxed);
-            if start == 0 { continue; }
+            if start == 0 {
+                continue;
+            }
             let elapsed = now - start;
-            if elapsed < threshold { continue; }
+            if elapsed < threshold {
+                continue;
+            }
             // Rate-limit: warn at most once per `threshold` secs
             // for the same in-flight call.
             let last = t.last_warn_sec.load(Ordering::Relaxed);
@@ -123,8 +129,11 @@ extern "C" fn monitor_main(_: *mut c_void) -> *mut c_void {
             if elapsed >= threshold * 2 {
                 let msg = b"ssh-stuck-detector: aborting stuck process\n";
                 unsafe {
-                    libc::write(libc::STDERR_FILENO,
-                        msg.as_ptr() as *const c_void, msg.len());
+                    libc::write(
+                        libc::STDERR_FILENO,
+                        msg.as_ptr() as *const c_void,
+                        msg.len(),
+                    );
                     libc::_exit(1);
                 }
             }
@@ -138,13 +147,30 @@ fn warn_stderr(name: &str, secs: i64) {
     let mut buf = [0u8; 128];
     let mut n: usize = 0;
     let prefix = b"ssh-stuck-detector: STUCK in ";
-    for &b in prefix { if n < buf.len() { buf[n] = b; n += 1; } }
-    for &b in name.as_bytes() { if n < buf.len() { buf[n] = b; n += 1; } }
+    for &b in prefix {
+        if n < buf.len() {
+            buf[n] = b;
+            n += 1;
+        }
+    }
+    for &b in name.as_bytes() {
+        if n < buf.len() {
+            buf[n] = b;
+            n += 1;
+        }
+    }
     let mid = b"() for ";
-    for &b in mid { if n < buf.len() { buf[n] = b; n += 1; } }
+    for &b in mid {
+        if n < buf.len() {
+            buf[n] = b;
+            n += 1;
+        }
+    }
     // itoa on `secs`
     let mut s = secs;
-    if s < 0 { s = 0; }
+    if s < 0 {
+        s = 0;
+    }
     let mut digits = [0u8; 20];
     let mut dn = 0;
     if s == 0 {
@@ -158,10 +184,18 @@ fn warn_stderr(name: &str, secs: i64) {
         }
     }
     for i in (0..dn).rev() {
-        if n < buf.len() { buf[n] = digits[i]; n += 1; }
+        if n < buf.len() {
+            buf[n] = digits[i];
+            n += 1;
+        }
     }
     let suffix = b" secs\n";
-    for &b in suffix { if n < buf.len() { buf[n] = b; n += 1; } }
+    for &b in suffix {
+        if n < buf.len() {
+            buf[n] = b;
+            n += 1;
+        }
+    }
     unsafe {
         libc::write(libc::STDERR_FILENO, buf.as_ptr() as *const c_void, n);
     }
@@ -208,15 +242,19 @@ pub unsafe extern "C" fn connect(fd: c_int, addr: *const sockaddr, len: socklen_
 
 // ---------- getaddrinfo ----------
 type GaiFn = unsafe extern "C" fn(
-    *const c_char, *const c_char,
-    *const libc::addrinfo, *mut *mut libc::addrinfo,
+    *const c_char,
+    *const c_char,
+    *const libc::addrinfo,
+    *mut *mut libc::addrinfo,
 ) -> c_int;
 static REAL_GAI: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 #[no_mangle]
 pub unsafe extern "C" fn getaddrinfo(
-    node: *const c_char, service: *const c_char,
-    hints: *const libc::addrinfo, res: *mut *mut libc::addrinfo,
+    node: *const c_char,
+    service: *const c_char,
+    hints: *const libc::addrinfo,
+    res: *mut *mut libc::addrinfo,
 ) -> c_int {
     let mut p = REAL_GAI.load(Ordering::Relaxed);
     if p.is_null() {
@@ -251,14 +289,23 @@ pub unsafe extern "C" fn recv(fd: c_int, buf: *mut c_void, n: size_t, flags: c_i
 }
 
 type RecvfromFn = unsafe extern "C" fn(
-    c_int, *mut c_void, size_t, c_int, *mut sockaddr, *mut socklen_t,
+    c_int,
+    *mut c_void,
+    size_t,
+    c_int,
+    *mut sockaddr,
+    *mut socklen_t,
 ) -> ssize_t;
 static REAL_RECVFROM: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 #[no_mangle]
 pub unsafe extern "C" fn recvfrom(
-    fd: c_int, buf: *mut c_void, n: size_t, flags: c_int,
-    addr: *mut sockaddr, addrlen: *mut socklen_t,
+    fd: c_int,
+    buf: *mut c_void,
+    n: size_t,
+    flags: c_int,
+    addr: *mut sockaddr,
+    addrlen: *mut socklen_t,
 ) -> ssize_t {
     let mut p = REAL_RECVFROM.load(Ordering::Relaxed);
     if p.is_null() {
@@ -294,4 +341,6 @@ pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut libc::msghdr, flags: c_int
 // Suppress dead-code warning on the IN_INTERCEPTOR flag — kept as
 // a hook for future re-entrancy guards if profiling shows spin.
 #[allow(dead_code)]
-fn _unused() { let _ = IN_INTERCEPTOR.load(Ordering::Relaxed); }
+fn _unused() {
+    let _ = IN_INTERCEPTOR.load(Ordering::Relaxed);
+}

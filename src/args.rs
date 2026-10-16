@@ -64,8 +64,7 @@ pub unsafe extern "C" fn add_arg(s: *const c_char) {
     }
 
     if newav.is_null() {
-        newav = calloc(START_AV_SZ, std::mem::size_of::<*mut c_char>())
-            as *mut *mut c_char;
+        newav = calloc(START_AV_SZ, std::mem::size_of::<*mut c_char>()) as *mut *mut c_char;
         if newav.is_null() {
             alloc_fail("malloc");
         }

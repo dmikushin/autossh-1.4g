@@ -29,9 +29,8 @@
 //! the SIGALRM-watchdog branches).
 
 use libc::{
-    c_char, c_double, c_int, c_uint, pollfd, sigset_t, time_t, timespec,
-    POLLERR, POLLHUP, POLLIN, SIGABRT, SIGALRM, SIGCHLD, SIGHUP, SIGINT,
-    SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2, WNOHANG,
+    c_char, c_double, c_int, c_uint, pollfd, sigset_t, time_t, timespec, POLLERR, POLLHUP, POLLIN,
+    SIGABRT, SIGALRM, SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2, WNOHANG,
 };
 use std::ptr;
 
@@ -39,9 +38,9 @@ use crate::errlog;
 use crate::signals::JmpBuf;
 
 const P_CONTINUE: c_int = 0;
-const P_RESTART:  c_int = 1;
-const P_EXITOK:   c_int = 2;
-const P_EXITERR:  c_int = 3;
+const P_RESTART: c_int = 1;
+const P_EXITOK: c_int = 2;
+const P_EXITERR: c_int = 3;
 
 const PORT_FWD_FAIL_DELAY: c_uint = 5;
 
@@ -134,8 +133,7 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
             if max_lifetime != 0.0 {
                 let mut now: time_t = 0;
                 libc::time(&raw mut now);
-                let secs_to_shutdown =
-                    max_lifetime - libc::difftime(now, pid_start_time);
+                let secs_to_shutdown = max_lifetime - libc::difftime(now, pid_start_time);
                 if secs_to_shutdown < poll_time as c_double {
                     SECS_LEFT = secs_to_shutdown as c_int;
                 }
@@ -178,16 +176,16 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                 if (spfd.revents & POLLIN) != 0 {
                     if crate::stderr_drain::check_ssh_stderr() != 0 {
                         crate::kill::ssh_kill();
-                        errlog!(libc::LOG_INFO,
+                        errlog!(
+                            libc::LOG_INFO,
                             "waiting {} seconds for port to be released",
-                            PORT_FWD_FAIL_DELAY);
+                            PORT_FWD_FAIL_DELAY
+                        );
                         libc::sleep(PORT_FWD_FAIL_DELAY);
                         return ret(&savedmask, P_RESTART);
                     }
                 }
-                if (spfd.revents & (POLLHUP | POLLERR)) != 0
-                    && (spfd.revents & POLLIN) == 0
-                {
+                if (spfd.revents & (POLLHUP | POLLERR)) != 0 && (spfd.revents & POLLIN) == 0 {
                     errlog!(libc::LOG_INFO, "SSH stderr pipe closed");
                     libc::close(ssh_stderr_fd);
                     ssh_stderr_fd = -1;
@@ -208,13 +206,8 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
             // the double-Ctrl+C force-exit.
             libc::sigprocmask(libc::SIG_SETMASK, &savedmask, ptr::null_mut());
             match val {
-                v if v == SIGINT
-                    || v == SIGTERM
-                    || v == SIGQUIT
-                    || v == SIGABRT =>
-                {
-                    errlog!(libc::LOG_INFO,
-                        "received signal to exit ({})", val);
+                v if v == SIGINT || v == SIGTERM || v == SIGQUIT || v == SIGABRT => {
+                    errlog!(libc::LOG_INFO, "received signal to exit ({})", val);
                     crate::kill::ssh_kill();
                     return ret(&savedmask, P_EXITERR);
                 }
@@ -230,13 +223,13 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                         libc::time(&raw mut now);
                         // Pipe-lost watchdog: SSH stderr fd was
                         // closed; child is dying or already dead.
-                        if pipe_lost_time != 0
-                            && libc::difftime(now, pipe_lost_time)
-                                >= max_session
+                        if pipe_lost_time != 0 && libc::difftime(now, pipe_lost_time) >= max_session
                         {
-                            errlog!(libc::LOG_WARNING,
+                            errlog!(
+                                libc::LOG_WARNING,
                                 "ssh child stuck for {:.0} secs after stderr pipe lost; restarting",
-                                libc::difftime(now, pipe_lost_time));
+                                libc::difftime(now, pipe_lost_time)
+                            );
                             crate::kill::ssh_kill();
                             return ret(&savedmask, P_RESTART);
                         }
@@ -250,10 +243,7 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
                         // and silence is normal (`ssh -N` is mute by
                         // design). This prevents the watchdog from
                         // killing healthy long-running sessions.
-                        if last_stderr_time == 0
-                            && libc::difftime(now, start_time)
-                                >= max_session
-                        {
+                        if last_stderr_time == 0 && libc::difftime(now, start_time) >= max_session {
                             errlog!(libc::LOG_WARNING,
                                 "ssh produced no stderr in {:.0} secs since start; assuming stuck in connect, restarting",
                                 libc::difftime(now, start_time));
@@ -264,16 +254,16 @@ pub unsafe extern "C" fn ssh_watch(sock: c_int) -> c_int {
 
                     if crate::stderr_drain::check_ssh_stderr() != 0 {
                         crate::kill::ssh_kill();
-                        errlog!(libc::LOG_INFO,
+                        errlog!(
+                            libc::LOG_INFO,
                             "waiting {} seconds for port to be released",
-                            PORT_FWD_FAIL_DELAY);
+                            PORT_FWD_FAIL_DELAY
+                        );
                         libc::sleep(PORT_FWD_FAIL_DELAY);
                         return ret(&savedmask, P_RESTART);
                     }
 
-                    if !writep.is_null() && sock != -1
-                        && conn_test(sock, mhost, writep) == 0
-                    {
+                    if !writep.is_null() && sock != -1 && conn_test(sock, mhost, writep) == 0 {
                         errlog!(libc::LOG_INFO, "port down, restarting ssh");
                         crate::kill::ssh_kill();
                         return ret(&savedmask, P_RESTART);

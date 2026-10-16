@@ -62,9 +62,7 @@ pub unsafe extern "C" fn usage(code: c_int) -> ! {
              \x20                       stuck and killed. 0 = no watchdog (default).\n\
              \x20                       Recommended with -M 0."
         );
-        eprintln!(
-            "    AUTOSSH_MESSAGE     - message to append to echo string (max 64 bytes)"
-        );
+        eprintln!("    AUTOSSH_MESSAGE     - message to append to echo string (max 64 bytes)");
         eprintln!("    AUTOSSH_PATH        - path to ssh if not default");
         eprintln!("    AUTOSSH_PIDFILE     - write pid to this file");
         eprintln!("    AUTOSSH_POLL        - how often to check the connection (seconds)");
@@ -107,12 +105,7 @@ pub unsafe extern "C" fn timestr() -> *mut c_char {
         return (&raw mut BUF) as *mut c_char;
     }
     let fmt = c"%Y/%m/%d %H:%M:%S".as_ptr();
-    libc::strftime(
-        (&raw mut BUF) as *mut c_char,
-        BUF_SZ,
-        fmt,
-        tm,
-    );
+    libc::strftime((&raw mut BUF) as *mut c_char, BUF_SZ, fmt, tm);
     (&raw mut BUF) as *mut c_char
 }
 

@@ -51,15 +51,20 @@ pub unsafe extern "C" fn check_ssh_stderr() -> c_int {
 
         // Forward to our own stderr (best-effort — ignore write
         // errors, matching the C original).
-        let _ = libc::write(libc::STDERR_FILENO, buf.as_ptr() as *const c_void,
-                            n as size_t);
+        let _ = libc::write(
+            libc::STDERR_FILENO,
+            buf.as_ptr() as *const c_void,
+            n as size_t,
+        );
 
         // Look for known-fatal patterns.
         let needle = c"remote port forwarding failed".as_ptr();
         let found = libc::strstr(buf.as_ptr() as *const c_char, needle);
         if !found.is_null() {
-            errlog!(libc::LOG_ERR,
-                "detected SSH error: remote port forwarding failed; will kill and restart ssh");
+            errlog!(
+                libc::LOG_ERR,
+                "detected SSH error: remote port forwarding failed; will kill and restart ssh"
+            );
             port_fwd_failed = 1;
             return 1;
         }
@@ -70,8 +75,10 @@ pub unsafe extern "C" fn check_ssh_stderr() -> c_int {
         let stuck = c"ssh-stuck-detector: STUCK".as_ptr();
         let found = libc::strstr(buf.as_ptr() as *const c_char, stuck);
         if !found.is_null() {
-            errlog!(libc::LOG_ERR,
-                "stuck-detector flagged ssh hung in a network syscall; will kill and restart ssh");
+            errlog!(
+                libc::LOG_ERR,
+                "stuck-detector flagged ssh hung in a network syscall; will kill and restart ssh"
+            );
             return 1;
         }
     }

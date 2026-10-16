@@ -19,9 +19,10 @@ use std::sync::OnceLock;
 
 /// The .so bytes, baked in at compile time. Built by cargo's
 /// workspace member `ssh-stuck-detector`.
-const SO_BYTES: &[u8] = include_bytes!(
-    concat!(env!("CARGO_MANIFEST_DIR"),
-        "/target/release/libssh_stuck_detector.so"));
+const SO_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/target/release/libssh_stuck_detector.so"
+));
 
 /// Path the .so was extracted to, set on first call to `path()`.
 static EXTRACTED: OnceLock<CString> = OnceLock::new();
@@ -97,7 +98,9 @@ pub fn install_for_child() {
     // putenv requires a leaked CString — the env keeps the pointer.
     if let Ok(cs) = CString::new(new_env) {
         let leaked = cs.into_raw();
-        unsafe { libc::putenv(leaked); }
+        unsafe {
+            libc::putenv(leaked);
+        }
     }
 }
 
@@ -106,7 +109,9 @@ pub fn install_for_child() {
 pub fn cleanup() {
     if let Some(c) = EXTRACTED.get() {
         if !c.as_bytes().is_empty() {
-            unsafe { libc::unlink(c.as_ptr() as *const c_char); }
+            unsafe {
+                libc::unlink(c.as_ptr() as *const c_char);
+            }
         }
     }
 }
